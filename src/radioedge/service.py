@@ -28,6 +28,12 @@ class EdgeService:
         runtime_dir = Path(self.config.runtime.runtime_dir)
         runtime_dir.mkdir(parents=True, exist_ok=True)
         self.fifo_path = runtime_dir / self.config.runtime.fifo_name
+        log.info(
+            "Preparing edge capture uri=%s freq=%.3fMHz fifo=%s",
+            self.config.capture.uri,
+            self.config.capture.freq_hz / 1e6,
+            self.fifo_path,
+        )
         self.capture = ContinuousPcmCapture(
             uri=self.config.capture.uri,
             freq=self.config.capture.freq_hz,
@@ -44,6 +50,7 @@ class EdgeService:
             ctcss_q=self.config.capture.ctcss_q,
             audio_gain=self.config.capture.audio_gain,
         )
+        log.info("Edge capture object initialized")
 
     def run(self) -> int:
         self._install_signal_handlers()

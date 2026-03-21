@@ -94,6 +94,22 @@ class BaseNfmFlowgraph:
         if ctcss_freq <= 0:
             raise ValueError("ctcss_freq must be greater than zero")
 
+        log.info(
+            "Initializing NFM flowgraph freq=%.3fMHz sample_rate=%.3fMHz quad_rate=%.1fkHz audio_rate=%sHz",
+            freq / 1e6,
+            sample_rate / 1e6,
+            quad_rate / 1e3,
+            audio_rate,
+        )
+        log.info(
+            "Flowgraph filters rf_squelch=%s fm_squelch=%s ctcss=%.1fHz(q=%.1f) audio_hpf=%.1fHz gain=%.2f",
+            f"{rf_squelch_db:.1f}dB" if rf_squelch_db >= -50.0 else "disabled",
+            f"{fm_squelch_threshold:.2f}" if fm_squelch_threshold >= 0.0 else "disabled",
+            ctcss_freq,
+            ctcss_q,
+            audio_hpf_cutoff,
+            audio_gain,
+        )
         log.info("Connecting to PlutoSDR: %s", uri)
         self.source = iio.fmcomms2_source_fc32(
             uri, [True, True, False, False], buffer_size
@@ -106,6 +122,7 @@ class BaseNfmFlowgraph:
         self.source.set_rfdc(True)
         self.source.set_bbdc(True)
         self.source.set_filter_params("Auto", "", 0.0, 0.0)
+        log.info("Configured PlutoSDR source buffer_size=%s", buffer_size)
 
         resample_interp = quad_rate
         resample_decim = sample_rate
@@ -170,14 +187,18 @@ class BaseNfmFlowgraph:
                 self.audio_hpf,
                 self.audio_gain,
             )
+        log.info("NFM flowgraph ready")
 
     def connect_audio_sink(self, sink) -> None:
         self.tb.connect(self.audio_gain, sink)
 
     def run(self) -> None:
+        log.info("Starting GNU Radio flowgraph")
         self.tb.run()
+        log.info("GNU Radio flowgraph stopped")
 
     def stop(self) -> None:
+        log.info("Stopping GNU Radio flowgraph")
         self.tb.stop()
 
     def wait(self) -> None:
