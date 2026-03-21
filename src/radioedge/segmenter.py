@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import os
+import stat
 import threading
 import wave
 from pathlib import Path
@@ -25,6 +26,7 @@ class SegmentWriter:
         segment: SegmentSettings,
         stop_event: threading.Event,
         stats: dict,
+        reader_ready_event: threading.Event | None = None,
     ) -> None:
         self.fifo_path = Path(fifo_path)
         self.spool_root = Path(spool_root)
@@ -32,6 +34,7 @@ class SegmentWriter:
         self.segment = segment
         self.stop_event = stop_event
         self.stats = stats
+        self.reader_ready_event = reader_ready_event
         self.ready_dir = self.spool_root / "ready"
         self.tmp_dir = self.spool_root / "tmp"
         self.bytes_per_sample = 2
@@ -43,19 +46,31 @@ class SegmentWriter:
         self.sequence = 0
         self.total_samples = 0
         self.pending_bytes = bytearray()
-        self.start_threshold = self._validate_threshold(self.segment.start_threshold, "start_threshold")
-        self.stop_threshold = self._validate_threshold(self.segment.stop_threshold, "stop_threshold")
+        self.start_threshold = self._validate_threshold(
+            self.segment.start_threshold, "start_threshold"
+        )
+        self.stop_threshold = self._validate_threshold(
+            self.segment.stop_threshold, "stop_threshold"
+        )
         if self.stop_threshold > self.start_threshold:
-            raise ValueError("stop_threshold must be less than or equal to start_threshold")
+            raise ValueError(
+                "stop_threshold must be less than or equal to start_threshold"
+            )
         if self.segment.min_silence_ms <= 0:
             raise ValueError("min_silence_ms must be greater than zero")
         if self.segment.min_segment_ms <= 0:
             raise ValueError("min_segment_ms must be greater than zero")
         if self.segment.max_segment_sec <= 0:
             raise ValueError("max_segment_sec must be greater than zero")
-        self.min_silence_samples = max(1, int(self.capture.audio_rate * self.segment.min_silence_ms / 1000))
-        self.min_segment_samples = max(1, int(self.capture.audio_rate * self.segment.min_segment_ms / 1000))
-        self.max_segment_samples = max(1, int(self.capture.audio_rate * self.segment.max_segment_sec))
+        self.min_silence_samples = max(
+            1, int(self.capture.audio_rate * self.segment.min_silence_ms / 1000)
+        )
+        self.min_segment_samples = max(
+            1, int(self.capture.audio_rate * self.segment.min_segment_ms / 1000)
+        )
+        self.max_segment_samples = max(
+            1, int(self.capture.audio_rate * self.segment.max_segment_sec)
+        )
         self.current_segment: dict | None = None
         self.stats["signal_active"] = False
         self.level_log_interval_ms = 2000
@@ -79,9 +94,13 @@ class SegmentWriter:
         ]:
             directory.mkdir(parents=True, exist_ok=True)
 
-        if self.fifo_path.exists():
-            self.fifo_path.unlink()
-        os.mkfifo(self.fifo_path)
+        if not self.fifo_path.exists():
+            os.mkfifo(self.fifo_path)
+            log.info("Created missing capture FIFO %s", self.fifo_path)
+        else:
+            fifo_mode = self.fifo_path.stat().st_mode
+            if not stat.S_ISFIFO(fifo_mode):
+                raise RuntimeError(f"Capture path is not a FIFO: {self.fifo_path}")
         self.stats["segmenter_running"] = True
         self.stats["session_id"] = self.session_id
         self.stats["session_start_utc_ms"] = self.session_start_utc_ms
@@ -90,6 +109,8 @@ class SegmentWriter:
         self.stats["activity_min_silence_ms"] = self.segment.min_silence_ms
         log.info("Segment writer waiting on FIFO %s", self.fifo_path)
         fifo_fd = os.open(self.fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+        if self.reader_ready_event is not None:
+            self.reader_ready_event.set()
         try:
             while not self.stop_event.is_set():
                 try:
@@ -105,6 +126,8 @@ class SegmentWriter:
                     log.info("Received first PCM chunk from capture FIFO")
                 self._process_chunk(chunk)
         finally:
+            if self.reader_ready_event is not None:
+                self.reader_ready_event.set()
             os.close(fifo_fd)
             if self.current_segment is not None:
                 self._close_segment()
@@ -114,7 +137,9 @@ class SegmentWriter:
 
     def _process_chunk(self, chunk: bytes) -> None:
         self.pending_bytes.extend(chunk)
-        usable_bytes = len(self.pending_bytes) - (len(self.pending_bytes) % self.bytes_per_sample)
+        usable_bytes = len(self.pending_bytes) - (
+            len(self.pending_bytes) % self.bytes_per_sample
+        )
         if usable_bytes <= 0:
             return
         payload = bytes(self.pending_bytes[:usable_bytes])
@@ -124,7 +149,11 @@ class SegmentWriter:
         raw_chunk_end_sample = raw_chunk_start_sample + chunk_samples
         chunk_start_sample = raw_chunk_start_sample
         chunk_end_sample = raw_chunk_end_sample
-        threshold = self.stop_threshold if self.current_segment is not None else self.start_threshold
+        threshold = (
+            self.stop_threshold
+            if self.current_segment is not None
+            else self.start_threshold
+        )
         active_offsets = self._active_offsets(payload, threshold)
         active = active_offsets is not None
         level_dbfs = self._chunk_level_dbfs(payload)
@@ -145,15 +174,23 @@ class SegmentWriter:
             self.current_segment["last_sample"] = chunk_end_sample
             if active:
                 _, last_offset = active_offsets
-                self.current_segment["last_active_sample"] = raw_chunk_start_sample + last_offset + 1
-            silence_samples = chunk_end_sample - self.current_segment["last_active_sample"]
-            reached_max = self.current_segment["samples_written"] >= self.max_segment_samples
+                self.current_segment["last_active_sample"] = (
+                    raw_chunk_start_sample + last_offset + 1
+                )
+            silence_samples = (
+                chunk_end_sample - self.current_segment["last_active_sample"]
+            )
+            reached_max = (
+                self.current_segment["samples_written"] >= self.max_segment_samples
+            )
             if silence_samples >= self.min_silence_samples or reached_max:
                 self._close_segment()
 
         self.total_samples = raw_chunk_end_sample
 
-    def _active_offsets(self, payload: bytes, threshold: float) -> tuple[int, int] | None:
+    def _active_offsets(
+        self, payload: bytes, threshold: float
+    ) -> tuple[int, int] | None:
         samples = np.frombuffer(payload, dtype="<i2").astype(np.int32)
         if samples.size == 0:
             return None
@@ -198,8 +235,12 @@ class SegmentWriter:
         return max(-120.0, 20.0 * math.log10(threshold))
 
     def _open_segment(self, start_sample: int) -> None:
-        segment_start_utc_ms = self.session_start_utc_ms + int(start_sample * 1000 / self.capture.audio_rate)
-        segment_id = f"{self.segment.stream_id}-{segment_start_utc_ms}-{self.sequence:06d}"
+        segment_start_utc_ms = self.session_start_utc_ms + int(
+            start_sample * 1000 / self.capture.audio_rate
+        )
+        segment_id = (
+            f"{self.segment.stream_id}-{segment_start_utc_ms}-{self.sequence:06d}"
+        )
         wav_tmp = self.tmp_dir / f"{segment_id}.wav.tmp"
         wav_file = wave.open(str(wav_tmp), "wb")
         wav_file.setnchannels(1)
@@ -257,7 +298,9 @@ class SegmentWriter:
                 self.segment.min_segment_ms,
             )
         else:
-            segment["meta_tmp"].write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
+            segment["meta_tmp"].write_text(
+                json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8"
+            )
             segment["wav_tmp"].replace(segment["wav_path"])
             segment["meta_tmp"].replace(segment["meta_path"])
             self.stats["last_segment_sequence"] = self.sequence
