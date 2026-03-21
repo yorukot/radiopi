@@ -1,2 +1,10 @@
 core-config.yaml
 edge-config.yaml
+data/
+db.sqlite3
+db.sqlite3-shm
+db.sqlite3-wal
+__pycache__/
+src/radiocommon/__pycache__/
+src/radiocore/__pycache__/
+src/radioedge/__pycache__/
