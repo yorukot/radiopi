@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import signal
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -28,6 +29,8 @@ class EdgeService:
         runtime_dir = Path(self.config.runtime.runtime_dir)
         runtime_dir.mkdir(parents=True, exist_ok=True)
         self.fifo_path = runtime_dir / self.config.runtime.fifo_name
+        self.status_path = Path(self.config.runtime.health_path)
+        self._reset_runtime_dir(runtime_dir)
         log.info(
             "Preparing edge capture uri=%s freq=%.3fMHz fifo=%s",
             self.config.capture.uri,
@@ -117,13 +120,26 @@ class EdgeService:
         self.stats["capture_running"] = False
         log.info("Capture loop stopped")
 
+    def _reset_runtime_dir(self, runtime_dir: Path) -> None:
+        removed: list[str] = []
+        for path in runtime_dir.iterdir():
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+            removed.append(path.name)
+        if self.status_path.exists() and self.status_path.parent != runtime_dir:
+            self.status_path.unlink(missing_ok=True)
+            removed.append(str(self.status_path))
+        if removed:
+            log.info("Cleared runtime artifacts: %s", ", ".join(sorted(removed)))
+
     def _write_status_loop(self) -> None:
-        status_path = Path(self.config.runtime.health_path)
-        status_path.parent.mkdir(parents=True, exist_ok=True)
+        self.status_path.parent.mkdir(parents=True, exist_ok=True)
         while not self.stop_event.is_set():
-            tmp_path = status_path.with_suffix(".tmp")
+            tmp_path = self.status_path.with_suffix(".tmp")
             tmp_path.write_text(json.dumps(self.stats, ensure_ascii=True, indent=2), encoding="utf-8")
-            tmp_path.replace(status_path)
+            tmp_path.replace(self.status_path)
             self.stop_event.wait(self.config.runtime.status_interval_sec)
 
     def _install_signal_handlers(self) -> None:
