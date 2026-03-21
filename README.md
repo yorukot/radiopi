@@ -64,6 +64,49 @@ Start the worker:
 uv run radio-core-worker --config examples/core-config.yaml
 ```
 
+## Docker
+
+Two separate container images are available for the core services:
+
+- `Dockerfile.core-api` for the ingest API
+- `Dockerfile.core-worker` for the ASR worker on a CUDA host
+
+Build them:
+
+```bash
+docker build -f Dockerfile.core-api -t radiopi-core-api .
+docker build -f Dockerfile.core-worker -t radiopi-core-worker .
+```
+
+Run the API:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -v "$(pwd)/core-config.yaml:/config/core-config.yaml:ro" \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/db.sqlite3:/app/db.sqlite3" \
+  radiopi-core-api
+```
+
+Run the CUDA worker:
+
+```bash
+docker run --rm \
+  --gpus all \
+  -v "$(pwd)/core-config.yaml:/config/core-config.yaml:ro" \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/db.sqlite3:/app/db.sqlite3" \
+  radiopi-core-worker
+```
+
+Notes:
+
+- both containers expect the config at `/config/core-config.yaml`
+- keep `database.path` and `data.*` inside the config aligned with the mounted `/app/db.sqlite3` and `/app/data`
+- the worker image is based on `nvidia/cuda` and needs NVIDIA Container Toolkit plus `docker run --gpus all`
+- if you want CPU-only inference in the worker container, set `asr.device: "cpu"` in `core-config.yaml`
+
 What the server does:
 
 - accepts `POST /v1/segments` with `multipart/form-data`
