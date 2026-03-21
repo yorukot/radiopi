@@ -40,7 +40,17 @@ def merge_wavs(
                     dst.setparams(current)
                     sample_rate = current.framerate
                     bytes_per_frame = current.sampwidth * current.nchannels
-                elif params is not None and current[:4] != params[:4]:
+                elif params is not None and (
+                    current.nchannels,
+                    current.sampwidth,
+                    current.framerate,
+                    current.comptype,
+                ) != (
+                    params.nchannels,
+                    params.sampwidth,
+                    params.framerate,
+                    params.comptype,
+                ):
                     raise ValueError(f"incompatible WAV params for {path}")
                 assert sample_rate is not None
                 assert bytes_per_frame is not None
