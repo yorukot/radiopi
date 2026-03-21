@@ -56,6 +56,7 @@ class SegmentWriter:
         self.min_segment_samples = max(1, int(self.capture.audio_rate * self.segment.min_segment_ms / 1000))
         self.max_segment_samples = max(1, int(self.capture.audio_rate * self.segment.max_segment_sec))
         self.current_segment: dict | None = None
+        self.stats["signal_active"] = False
 
     def _validate_threshold(self, value: float, name: str) -> float:
         if not 0.0 <= value <= 1.0:
@@ -79,6 +80,9 @@ class SegmentWriter:
         self.stats["segmenter_running"] = True
         self.stats["session_id"] = self.session_id
         self.stats["session_start_utc_ms"] = self.session_start_utc_ms
+        self.stats["activity_start_threshold"] = self.start_threshold
+        self.stats["activity_stop_threshold"] = self.stop_threshold
+        self.stats["activity_min_silence_ms"] = self.segment.min_silence_ms
         log.info("Segment writer waiting on FIFO %s", self.fifo_path)
         try:
             with self.fifo_path.open("rb", buffering=0) as handle:
@@ -164,6 +168,14 @@ class SegmentWriter:
             "wav_file": wav_file,
         }
         self.stats["current_segment_id"] = segment_id
+        self.stats["signal_active"] = True
+        self.stats["current_segment_started_at"] = segment_start_utc_ms
+        log.info(
+            "Signal detected; recording segment=%s start_utc_ms=%s sequence=%s",
+            segment_id,
+            segment_start_utc_ms,
+            self.sequence,
+        )
 
     def _close_segment(self) -> None:
         assert self.current_segment is not None
@@ -187,6 +199,12 @@ class SegmentWriter:
             segment["wav_tmp"].unlink(missing_ok=True)
             segment["meta_tmp"].unlink(missing_ok=True)
             self.stats["last_discarded_segment_id"] = segment["segment_id"]
+            log.info(
+                "Signal ended; discarded short segment=%s duration_ms=%s threshold_ms=%s",
+                segment["segment_id"],
+                duration_ms,
+                self.segment.min_segment_ms,
+            )
         else:
             segment["meta_tmp"].write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
             segment["wav_tmp"].replace(segment["wav_path"])
@@ -194,6 +212,15 @@ class SegmentWriter:
             self.stats["last_segment_sequence"] = self.sequence
             self.stats["last_segment_id"] = segment["segment_id"]
             self.stats["last_segment_duration_ms"] = duration_ms
+            self.stats["last_segment_ready_at"] = now_utc_ms()
+            log.info(
+                "Signal ended; finalized segment=%s duration_ms=%s ready_path=%s",
+                segment["segment_id"],
+                duration_ms,
+                segment["wav_path"],
+            )
             self.sequence += 1
+        self.stats["signal_active"] = False
         self.stats.pop("current_segment_id", None)
+        self.stats.pop("current_segment_started_at", None)
         self.current_segment = None

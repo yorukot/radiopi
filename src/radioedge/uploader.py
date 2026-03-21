@@ -33,6 +33,7 @@ class SegmentUploader:
         for directory in [root, ready_dir, sending_dir, acked_dir, root / "failed", root / "tmp"]:
             directory.mkdir(parents=True, exist_ok=True)
         self.stats["uploader_running"] = True
+        self.stats["upload_target"] = self.upload.base_url
         with httpx.Client(timeout=self.upload.timeout_sec) as client:
             while not self.stop_event.is_set():
                 uploaded_any = False
@@ -49,18 +50,25 @@ class SegmentUploader:
                         continue
                     uploaded_any = True
                     segment_id = sending_meta.stem
+                    self.stats["last_upload_segment_id"] = segment_id
+                    self.stats["last_upload_started_at"] = now_utc_ms()
+                    log.info("Starting upload for segment=%s target=%s", segment_id, self.upload.base_url)
                     if self._upload_one(client, sending_wav, sending_meta):
                         self.failure_counts.pop(segment_id, None)
                         self.stats["last_upload_success_at"] = now_utc_ms()
                         if self.spool.keep_acked:
                             sending_meta.replace(acked_dir / sending_meta.name)
                             sending_wav.replace(acked_dir / sending_wav.name)
+                            log.info("Upload complete for segment=%s; moved to acked", segment_id)
                         else:
                             sending_meta.unlink(missing_ok=True)
                             sending_wav.unlink(missing_ok=True)
+                            log.info("Upload complete for segment=%s; local copy removed", segment_id)
                     else:
                         tries = self.failure_counts.get(segment_id, 0) + 1
                         self.failure_counts[segment_id] = tries
+                        self.stats["last_upload_failed_at"] = now_utc_ms()
+                        self.stats["last_upload_attempts"] = tries
                         sending_meta.replace(ready_dir / sending_meta.name)
                         sending_wav.replace(ready_dir / sending_wav.name)
                         delay = min(
@@ -90,7 +98,12 @@ class SegmentUploader:
                 )
             response.raise_for_status()
             payload = response.json()
-            log.info("Uploaded %s with status %s", wav_path.stem, payload.get("status"))
+            log.info(
+                "Uploaded segment=%s status=%s accepted=%s",
+                wav_path.stem,
+                payload.get("status"),
+                payload.get("accepted"),
+            )
             return bool(payload.get("accepted"))
         except Exception as exc:
             log.exception("Failed to upload %s: %s", wav_path.name, exc)

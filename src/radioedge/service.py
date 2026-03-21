@@ -47,6 +47,13 @@ class EdgeService:
 
     def run(self) -> int:
         self._install_signal_handlers()
+        log.info(
+            "Starting edge service stream=%s freq=%sHz upload=%s spool=%s",
+            self.config.segment.stream_id,
+            self.config.capture.freq_hz,
+            self.config.upload.base_url,
+            self.config.spool.root_dir,
+        )
         segmenter = SegmentWriter(
             fifo_path=self.fifo_path,
             spool_root=self.config.spool.root_dir,
@@ -68,14 +75,17 @@ class EdgeService:
         ]
         for thread in threads:
             thread.start()
+            log.info("Started %s thread", thread.name)
         while not self.fifo_path.exists() and not self.stop_event.is_set():
             time.sleep(0.1)
         capture_thread = threading.Thread(target=self._run_capture, name="capture", daemon=True)
         capture_thread.start()
+        log.info("Started capture thread")
         try:
             while not self.stop_event.is_set():
                 time.sleep(1)
         finally:
+            log.info("Stopping edge service")
             self.stop_event.set()
             try:
                 self.capture.stop()
@@ -89,6 +99,7 @@ class EdgeService:
 
     def _run_capture(self) -> None:
         self.stats["capture_running"] = True
+        log.info("Capture loop starting")
         try:
             self.capture.run()
         except Exception:
@@ -97,6 +108,7 @@ class EdgeService:
             log.exception("Capture loop failed")
             raise
         self.stats["capture_running"] = False
+        log.info("Capture loop stopped")
 
     def _write_status_loop(self) -> None:
         status_path = Path(self.config.runtime.health_path)
