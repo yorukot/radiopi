@@ -18,7 +18,7 @@ DEFAULT_URI = "usb:1.2.5"
 DEFAULT_FREQ = 430_230_000
 DEFAULT_SAMPLE_RATE = 1_008_000
 DEFAULT_QUAD_RATE = 240_000
-DEFAULT_AUDIO_RATE = 48_000
+DEFAULT_AUDIO_RATE = 16_000
 DEFAULT_DURATION = 10
 DEFAULT_BUFFER_SIZE = 262_144
 DEFAULT_OUTPUT = "record.wav"
@@ -48,9 +48,10 @@ def design_audio_hpf_taps(audio_rate: int, cutoff_hz: float) -> list[float]:
     return taps.tolist()
 
 
-def design_ctcss_notch_taps(audio_rate: int, tone_hz: float) -> list[float]:
-    stop_width_hz = 8.0
-    transition_hz = 12.0
+def design_ctcss_notch_taps(audio_rate: int, tone_hz: float, q_factor: float) -> list[float]:
+    if q_factor <= 0:
+        raise ValueError("ctcss_q must be greater than zero")
+    stop_width_hz = max(3.0, tone_hz / (2.0 * q_factor))
     taps = signal.firwin(
         1201,
         [max(1.0, tone_hz - stop_width_hz), tone_hz + stop_width_hz],
@@ -68,7 +69,7 @@ logging.basicConfig(
 log = logging.getLogger("pluto-gnuradio-recorder")
 
 
-class NfmRecorder:
+class BaseNfmFlowgraph:
     def __init__(
         self,
         uri: str,
@@ -76,8 +77,6 @@ class NfmRecorder:
         sample_rate: int,
         quad_rate: int,
         audio_rate: int,
-        duration: int,
-        output_path: str,
         buffer_size: int,
         rf_squelch_db: float,
         rf_squelch_alpha: float,
@@ -91,14 +90,6 @@ class NfmRecorder:
 
         if quad_rate % audio_rate != 0:
             raise ValueError("quad_rate must be an integer multiple of audio_rate")
-
-        duration_samples = int(duration * audio_rate)
-        if duration_samples <= 0:
-            raise ValueError("duration must be greater than zero")
-
-        output = Path(output_path)
-        if output.exists():
-            output.unlink()
 
         if ctcss_freq <= 0:
             raise ValueError("ctcss_freq must be greater than zero")
@@ -147,18 +138,9 @@ class NfmRecorder:
         )
         self.ctcss_notch = filter.fir_filter_fff(
             1,
-            design_ctcss_notch_taps(audio_rate, ctcss_freq),
+            design_ctcss_notch_taps(audio_rate, ctcss_freq, ctcss_q),
         )
         self.audio_gain = blocks.multiply_const_ff(audio_gain)
-        self.head = blocks.head(gr.sizeof_float, duration_samples)
-        self.wav_sink = blocks.wavfile_sink(
-            str(output),
-            1,
-            audio_rate,
-            blocks.FORMAT_WAV,
-            blocks.FORMAT_PCM_16,
-            False,
-        )
 
         if self.rf_squelch is not None:
             self.tb.connect(
@@ -179,8 +161,6 @@ class NfmRecorder:
                 self.ctcss_notch,
                 self.audio_hpf,
                 self.audio_gain,
-                self.head,
-                self.wav_sink,
             )
         else:
             self.fm_squelch = None
@@ -189,9 +169,10 @@ class NfmRecorder:
                 self.ctcss_notch,
                 self.audio_hpf,
                 self.audio_gain,
-                self.head,
-                self.wav_sink,
             )
+
+    def connect_audio_sink(self, sink) -> None:
+        self.tb.connect(self.audio_gain, sink)
 
     def run(self) -> None:
         self.tb.run()
@@ -201,6 +182,102 @@ class NfmRecorder:
 
     def wait(self) -> None:
         self.tb.wait()
+
+
+class NfmRecorder(BaseNfmFlowgraph):
+    def __init__(
+        self,
+        uri: str,
+        freq: int,
+        sample_rate: int,
+        quad_rate: int,
+        audio_rate: int,
+        duration: int,
+        output_path: str,
+        buffer_size: int,
+        rf_squelch_db: float,
+        rf_squelch_alpha: float,
+        fm_squelch_threshold: float,
+        audio_hpf_cutoff: float,
+        ctcss_freq: float,
+        ctcss_q: float,
+        audio_gain: float,
+    ) -> None:
+        duration_samples = int(duration * audio_rate)
+        if duration_samples <= 0:
+            raise ValueError("duration must be greater than zero")
+
+        output = Path(output_path)
+        if output.exists():
+            output.unlink()
+
+        super().__init__(
+            uri=uri,
+            freq=freq,
+            sample_rate=sample_rate,
+            quad_rate=quad_rate,
+            audio_rate=audio_rate,
+            buffer_size=buffer_size,
+            rf_squelch_db=rf_squelch_db,
+            rf_squelch_alpha=rf_squelch_alpha,
+            fm_squelch_threshold=fm_squelch_threshold,
+            audio_hpf_cutoff=audio_hpf_cutoff,
+            ctcss_freq=ctcss_freq,
+            ctcss_q=ctcss_q,
+            audio_gain=audio_gain,
+        )
+
+        self.head = blocks.head(gr.sizeof_float, duration_samples)
+        self.wav_sink = blocks.wavfile_sink(
+            str(output),
+            1,
+            audio_rate,
+            blocks.FORMAT_WAV,
+            blocks.FORMAT_PCM_16,
+            False,
+        )
+        self.tb.connect(self.audio_gain, self.head, self.wav_sink)
+
+
+class ContinuousPcmCapture(BaseNfmFlowgraph):
+    def __init__(
+        self,
+        uri: str,
+        freq: int,
+        sample_rate: int,
+        quad_rate: int,
+        audio_rate: int,
+        pcm_path: str,
+        buffer_size: int,
+        rf_squelch_db: float,
+        rf_squelch_alpha: float,
+        fm_squelch_threshold: float,
+        audio_hpf_cutoff: float,
+        ctcss_freq: float,
+        ctcss_q: float,
+        audio_gain: float,
+    ) -> None:
+        super().__init__(
+            uri=uri,
+            freq=freq,
+            sample_rate=sample_rate,
+            quad_rate=quad_rate,
+            audio_rate=audio_rate,
+            buffer_size=buffer_size,
+            rf_squelch_db=rf_squelch_db,
+            rf_squelch_alpha=rf_squelch_alpha,
+            fm_squelch_threshold=fm_squelch_threshold,
+            audio_hpf_cutoff=audio_hpf_cutoff,
+            ctcss_freq=ctcss_freq,
+            ctcss_q=ctcss_q,
+            audio_gain=audio_gain,
+        )
+
+        self.float_to_short = blocks.float_to_short(1, 32767.0)
+        self.pcm_sink = blocks.file_sink(gr.sizeof_short, pcm_path, False)
+        self.pcm_sink.set_unbuffered(True)
+        self.connect_audio_sink(self.float_to_short)
+        self.tb.connect(self.float_to_short, self.pcm_sink)
 
 
 def parse_args() -> argparse.Namespace:

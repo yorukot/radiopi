@@ -4,18 +4,30 @@ version = "0.1.0"
 description = "PlutoSDR NFM receiver with GNU Radio WAV recording"
 requires-python = ">=3.10"
 dependencies = [
+    "fastapi>=0.116",
+    "faster-whisper>=1.2.0",
+    "httpx>=0.28",
     "pyadi-iio>=0.0.14",
     "numpy>=1.24",
+    "PyYAML>=6.0",
     "scipy>=1.11",
+    "uvicorn>=0.35",
 ]
 
 [project.scripts]
 nfm-record = "nfm:main"
 rf-power-debug = "rf_debug:main"
+radio-edge-run = "radioedge.service:main"
+radio-core-api = "radiocore.api:main"
+radio-core-worker = "radiocore.worker:main"
 
 [build-system]
 requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-include = ["nfm.py", "rf_debug.py"]
+packages = ["src/radiocommon", "src/radioedge", "src/radiocore"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"nfm.py" = "nfm.py"
+"rf_debug.py" = "rf_debug.py"

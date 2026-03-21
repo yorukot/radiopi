@@ -1,12 +1,16 @@
-# RadioPi NFM Recorder
+# RadioPi Services
 
-GNU Radio based PlutoSDR NFM recorder with WAV export and an RF power debug tool for squelch tuning.
+This repo now contains two Python services for the WAV-first SDR to ASR pipeline:
+
+- `radio-edge-run`: PlutoSDR capture, continuous PCM output, 10-second WAV segmentation, local spool, retry upload
+- `radio-core-api`: ingest API and health endpoints on the GPU server
+- `radio-core-worker`: persistent `faster-whisper` worker, transcript normalization, 10-minute WAV/SRT archive build, Telegram notification
 
 ## Requirements
 
-- PlutoSDR
-- GNU Radio with `gr-iio`
+- PlutoSDR and GNU Radio with `gr-iio` for the edge node
 - Python managed with `uv`
+- CUDA-capable GPU for `faster-whisper` if you want GPU inference
 
 ## Install
 
@@ -14,60 +18,93 @@ GNU Radio based PlutoSDR NFM recorder with WAV export and an RF power debug tool
 uv sync
 ```
 
-## Record Audio
+## Edge Service
 
-Default 10-second recording:
+Example config: `examples/edge-config.yaml`
 
-```bash
-uv run nfm-record
-```
-
-Useful options:
+Run it with:
 
 ```bash
-uv run nfm-record --output record.wav
-uv run nfm-record --rf-squelch-db -30
-uv run nfm-record --audio-gain 0.7
+uv run radio-edge-run --config examples/edge-config.yaml
 ```
 
-Current defaults are tuned for the measured environment:
+What it does:
 
-- RF squelch: `-30 dB`
-- FM squelch: disabled by default
-- Audio HPF: `300 Hz`
-- CTCSS notch: `156.7 Hz`
+- keeps the GNU Radio flowgraph running continuously
+- emits raw PCM16 at `16000 Hz` into a FIFO
+- cuts sample-accurate 10-second WAV segments
+- writes `wav + json` into `spool/ready`
+- uploads to the server with retry and backoff
+- writes runtime status to `runtime/edge-status.json`
 
-## Debug Squelch
+Spool layout:
 
-Measure idle noise floor:
+```text
+spool/
+  tmp/
+  ready/
+  sending/
+  acked/
+  failed/
+```
+
+## Core Service
+
+Example config: `examples/core-config.yaml`
+
+Start the API:
 
 ```bash
-uv run rf-power-debug --duration 3 --window-ms 250 --label idle
+uv run radio-core-api --config examples/core-config.yaml
 ```
 
-Measure active signal:
+Start the worker:
 
 ```bash
-uv run rf-power-debug --duration 3 --window-ms 250 --label active
+uv run radio-core-worker --config examples/core-config.yaml
 ```
 
-JSON output:
+What the server does:
 
-```bash
-uv run rf-power-debug --duration 3 --window-ms 250 --label idle --json
+- accepts `POST /v1/segments` with `multipart/form-data`
+- stores WAV and metadata durably before acknowledging
+- queues jobs in SQLite
+- keeps one `faster-whisper` model loaded in memory
+- writes raw ASR JSON and canonical daily JSONL transcripts
+- builds 10-minute merged WAV and SRT archives
+- optionally sends Telegram summaries and files
+
+Health endpoints:
+
+- `GET /healthz`
+- `GET /readyz`
+
+Artifacts:
+
+```text
+data/
+  raw/
+  raw_asr/
+  transcripts/
+  archives/
+  telegram/
 ```
 
-How to set RF squelch:
+## Smoke Test Flow
 
-1. Run one idle capture.
-2. Run one active capture.
-3. Place `--rf-squelch-db` clearly above idle `IQ p95` and clearly below active `IQ p50`.
+1. Start `radio-core-api`
+2. Start `radio-core-worker`
+3. Start `radio-edge-run`
+4. Watch `spool/acked`, `data/raw`, `data/raw_asr`, and `data/archives`
 
-In the current measurements:
+## Legacy Tools
 
-- idle `IQ p95`: about `-43.4 dB`
-- active `IQ p50`: about `-11.0 dB`
-- recommended starting point: `-30 dB`
+The original one-shot recorder and debug helper still exist:
+
+- `uv run nfm-record`
+- `uv run rf-power-debug`
+
+The recorder default audio rate is now `16000 Hz`, and the CTCSS notch now actually uses `ctcss_q`.
 
 ## Make Targets
 
@@ -77,12 +114,8 @@ make record
 make debug-idle
 make debug-active
 make debug-json
+make edge
+make core-api
+make core-worker
 make check
 ```
-
-## Project Files
-
-- `nfm.py`: recorder entrypoint
-- `rf_debug.py`: RF/audio level debug tool
-- `pyproject.toml`: `uv` project config
-- `Makefile`: shortcut commands

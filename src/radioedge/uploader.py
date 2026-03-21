@@ -1,0 +1,107 @@
+import logging
+from pathlib import Path
+
+import httpx
+
+from radiocommon import now_utc_ms
+
+from .config import SpoolSettings
+from .config import UploadSettings
+
+log = logging.getLogger(__name__)
+
+
+class SegmentUploader:
+    def __init__(
+        self,
+        spool: SpoolSettings,
+        upload: UploadSettings,
+        stop_event,
+        stats: dict,
+    ) -> None:
+        self.spool = spool
+        self.upload = upload
+        self.stop_event = stop_event
+        self.stats = stats
+        self.failure_counts: dict[str, int] = {}
+
+    def run(self) -> None:
+        root = Path(self.spool.root_dir)
+        ready_dir = root / "ready"
+        sending_dir = root / "sending"
+        acked_dir = root / "acked"
+        for directory in [root, ready_dir, sending_dir, acked_dir, root / "failed", root / "tmp"]:
+            directory.mkdir(parents=True, exist_ok=True)
+        self.stats["uploader_running"] = True
+        with httpx.Client(timeout=self.upload.timeout_sec) as client:
+            while not self.stop_event.is_set():
+                uploaded_any = False
+                for meta_path in sorted(ready_dir.glob("*.json")):
+                    wav_path = meta_path.with_suffix(".wav")
+                    if not wav_path.exists():
+                        continue
+                    sending_meta = sending_dir / meta_path.name
+                    sending_wav = sending_dir / wav_path.name
+                    try:
+                        meta_path.replace(sending_meta)
+                        wav_path.replace(sending_wav)
+                    except FileNotFoundError:
+                        continue
+                    uploaded_any = True
+                    segment_id = sending_meta.stem
+                    if self._upload_one(client, sending_wav, sending_meta):
+                        self.failure_counts.pop(segment_id, None)
+                        self.stats["last_upload_success_at"] = now_utc_ms()
+                        if self.spool.keep_acked:
+                            sending_meta.replace(acked_dir / sending_meta.name)
+                            sending_wav.replace(acked_dir / sending_wav.name)
+                        else:
+                            sending_meta.unlink(missing_ok=True)
+                            sending_wav.unlink(missing_ok=True)
+                    else:
+                        tries = self.failure_counts.get(segment_id, 0) + 1
+                        self.failure_counts[segment_id] = tries
+                        sending_meta.replace(ready_dir / sending_meta.name)
+                        sending_wav.replace(ready_dir / sending_wav.name)
+                        delay = min(
+                            self.upload.initial_backoff_sec * (2 ** (tries - 1)),
+                            self.upload.max_backoff_sec,
+                        )
+                        log.warning("Upload failed for %s, retrying in %.1fs", segment_id, delay)
+                        if self.stop_event.wait(delay):
+                            break
+                self._update_spool_stats(root)
+                if not uploaded_any:
+                    self.stop_event.wait(self.spool.scan_interval_sec)
+        self.stats["uploader_running"] = False
+
+    def _upload_one(self, client: httpx.Client, wav_path: Path, meta_path: Path) -> bool:
+        metadata = meta_path.read_text(encoding="utf-8")
+        headers = {"X-API-Key": self.upload.api_key}
+        try:
+            with wav_path.open("rb") as handle:
+                response = client.post(
+                    f"{self.upload.base_url.rstrip('/')}/v1/segments",
+                    headers=headers,
+                    files={
+                        "file": (wav_path.name, handle, "audio/wav"),
+                        "metadata": (None, metadata, "application/json"),
+                    },
+                )
+            response.raise_for_status()
+            payload = response.json()
+            log.info("Uploaded %s with status %s", wav_path.stem, payload.get("status"))
+            return bool(payload.get("accepted"))
+        except Exception as exc:
+            log.exception("Failed to upload %s: %s", wav_path.name, exc)
+            return False
+
+    def _update_spool_stats(self, root: Path) -> None:
+        ready_dir = root / "ready"
+        ready_files = list(ready_dir.glob("*.json"))
+        self.stats["spool_ready_count"] = len(ready_files)
+        total_bytes = 0
+        for path in root.rglob("*"):
+            if path.is_file():
+                total_bytes += path.stat().st_size
+        self.stats["spool_disk_usage"] = total_bytes

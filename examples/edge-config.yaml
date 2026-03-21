@@ -1,0 +1,36 @@
+capture:
+  uri: "usb:1.2.5"
+  freq_hz: 430230000
+  sample_rate: 1008000
+  quad_rate: 240000
+  audio_rate: 16000
+  buffer_size: 262144
+  rf_squelch_db: -30.0
+  rf_squelch_alpha: 0.001
+  fm_squelch_threshold: -1.0
+  audio_hpf_cutoff: 300.0
+  ctcss_freq: 156.7
+  ctcss_q: 30.0
+  audio_gain: 0.7
+
+segment:
+  duration_sec: 10
+  stream_id: "pluto430230"
+
+spool:
+  root_dir: "./spool"
+  keep_acked: true
+  scan_interval_sec: 2.0
+
+upload:
+  base_url: "http://127.0.0.1:8080"
+  api_key: "replace-me"
+  timeout_sec: 30.0
+  initial_backoff_sec: 2.0
+  max_backoff_sec: 60.0
+
+runtime:
+  runtime_dir: "./runtime"
+  health_path: "./runtime/edge-status.json"
+  fifo_name: "capture.pcm"
+  status_interval_sec: 5.0
