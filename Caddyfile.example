@@ -1,0 +1,9 @@
+your-domain.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8080
+}
+
+# For local-only testing without a real domain, you can also use:
+# :8081 {
+#     reverse_proxy 127.0.0.1:8080
+# }

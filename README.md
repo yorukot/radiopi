@@ -64,6 +64,32 @@ Start the worker:
 uv run radio-core-worker --config examples/core-config.yaml
 ```
 
+### Caddy Reverse Proxy
+
+If you want a simple public-facing proxy in front of `radio-core-api`, use Caddy.
+
+1. Copy `Caddyfile.example` to `Caddyfile` and replace `your-domain.example.com` with your real domain.
+2. Keep the API listening on `127.0.0.1:8080` or `0.0.0.0:8080`.
+3. Start the API and worker with `uv`.
+4. Start Caddy with the config.
+
+Example commands:
+
+```bash
+cp Caddyfile.example Caddyfile
+uv run radio-core-api --config core-config.yaml
+uv run radio-core-worker --config core-config.yaml
+caddy run --config Caddyfile
+```
+
+If you want Caddy to be the only public entrypoint, it is a good idea to bind the API to localhost in `core-config.yaml`:
+
+```yaml
+api:
+  host: "127.0.0.1"
+  port: 8080
+```
+
 ## Docker
 
 Two separate container images are available for the core services:

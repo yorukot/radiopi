@@ -8,3 +8,5 @@ __pycache__/
 src/radiocommon/__pycache__/
 src/radiocore/__pycache__/
 src/radioedge/__pycache__/
+spool/
+runtime/
