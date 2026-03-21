@@ -36,8 +36,13 @@ class CaptureSettings:
 
 @dataclass(slots=True)
 class SegmentSettings:
-    duration_sec: int = 10
     stream_id: str = "pluto430230"
+    duration_sec: int = 10
+    start_threshold: float = 0.02
+    stop_threshold: float = 0.01
+    min_silence_ms: int = 1200
+    min_segment_ms: int = 500
+    max_segment_sec: int = 300
 
 
 @dataclass(slots=True)

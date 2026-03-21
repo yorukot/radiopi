@@ -127,7 +127,12 @@ class CoreWorker:
             base_name = window["id"]
             wav_path = archive_dir / f"{base_name}.wav"
             srt_path = archive_dir / f"{base_name}.srt"
-            merge_wavs([segment["wav_path"] for segment in segments], str(wav_path))
+            merge_wavs(
+                segments,
+                str(wav_path),
+                window_start_ms=window["window_start_utc_ms"],
+                window_duration_ms=window_ms,
+            )
             write_srt(transcript_items, window["window_start_utc_ms"], str(srt_path))
             self.db.mark_window_built(window["id"], str(wav_path), str(srt_path), window_ms)
             worked = True

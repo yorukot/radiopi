@@ -81,13 +81,14 @@ class Database:
         now_iso = iso_utc_from_ms(now_utc_ms())
         window_ms_value = window_start_ms(metadata["segment_start_utc_ms"], window_ms)
         window_id = f"{metadata['stream_id']}-{window_ms_value}"
+        session_start_utc_ms = metadata.get("session_start_utc_ms", metadata["segment_start_utc_ms"])
         with self.connect() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO sessions(id, stream_id, session_start_utc_ms, created_at) VALUES(?, ?, ?, ?)",
                 (
                     metadata["session_id"],
                     metadata["stream_id"],
-                    metadata["segment_start_utc_ms"] - metadata["sequence"] * metadata["duration_ms"],
+                    session_start_utc_ms,
                     now_iso,
                 ),
             )
@@ -211,7 +212,7 @@ class Database:
     def fetch_window_segments(self, stream_id: str, window_start: int, window_ms: int) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM segments WHERE stream_id = ? AND segment_start_utc_ms >= ? AND segment_start_utc_ms < ? ORDER BY sequence, segment_start_utc_ms",
+                "SELECT * FROM segments WHERE stream_id = ? AND segment_start_utc_ms >= ? AND segment_start_utc_ms < ? ORDER BY segment_start_utc_ms, sequence",
                 (stream_id, window_start, window_start + window_ms),
             ).fetchall()
         return [dict(row) for row in rows]

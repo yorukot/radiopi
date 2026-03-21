@@ -2,7 +2,7 @@
 
 This repo now contains two Python services for the WAV-first SDR to ASR pipeline:
 
-- `radio-edge-run`: PlutoSDR capture, continuous PCM output, 10-second WAV segmentation, local spool, retry upload
+- `radio-edge-run`: PlutoSDR capture, continuous PCM output, activity-based WAV segmentation, local spool, retry upload
 - `radio-core-api`: ingest API and health endpoints on the GPU server
 - `radio-core-worker`: persistent `faster-whisper` worker, transcript normalization, 10-minute WAV/SRT archive build, Telegram notification
 
@@ -32,7 +32,7 @@ What it does:
 
 - keeps the GNU Radio flowgraph running continuously
 - emits raw PCM16 at `16000 Hz` into a FIFO
-- cuts sample-accurate 10-second WAV segments
+- opens a new WAV when audio activity starts and closes it after silence
 - writes `wav + json` into `spool/ready`
 - uploads to the server with retry and backoff
 - writes runtime status to `runtime/edge-status.json`
@@ -96,6 +96,8 @@ data/
 2. Start `radio-core-worker`
 3. Start `radio-edge-run`
 4. Watch `spool/acked`, `data/raw`, `data/raw_asr`, and `data/archives`
+
+Edge segmentation is now activity-based instead of fixed 10-second chunks. Segment start and duration are derived from the continuous sample clock so server-side archives can preserve real silence gaps and keep WAV/SRT timelines aligned.
 
 ## Legacy Tools
 

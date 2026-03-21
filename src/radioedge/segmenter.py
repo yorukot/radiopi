@@ -5,6 +5,8 @@ import threading
 import wave
 from pathlib import Path
 
+import numpy as np
+
 from radiocommon import format_session_id, now_utc_ms
 
 from .config import CaptureSettings
@@ -32,15 +34,33 @@ class SegmentWriter:
         self.ready_dir = self.spool_root / "ready"
         self.tmp_dir = self.spool_root / "tmp"
         self.bytes_per_sample = 2
-        self.bytes_per_segment = (
-            self.capture.audio_rate * self.segment.duration_sec * self.bytes_per_sample
-        )
         self.session_start_utc_ms = now_utc_ms()
         self.session_id = format_session_id(
             self.segment.stream_id,
             self.session_start_utc_ms,
         )
         self.sequence = 0
+        self.total_samples = 0
+        self.pending_bytes = bytearray()
+        self.start_threshold = self._validate_threshold(self.segment.start_threshold, "start_threshold")
+        self.stop_threshold = self._validate_threshold(self.segment.stop_threshold, "stop_threshold")
+        if self.stop_threshold > self.start_threshold:
+            raise ValueError("stop_threshold must be less than or equal to start_threshold")
+        if self.segment.min_silence_ms <= 0:
+            raise ValueError("min_silence_ms must be greater than zero")
+        if self.segment.min_segment_ms <= 0:
+            raise ValueError("min_segment_ms must be greater than zero")
+        if self.segment.max_segment_sec <= 0:
+            raise ValueError("max_segment_sec must be greater than zero")
+        self.min_silence_samples = max(1, int(self.capture.audio_rate * self.segment.min_silence_ms / 1000))
+        self.min_segment_samples = max(1, int(self.capture.audio_rate * self.segment.min_segment_ms / 1000))
+        self.max_segment_samples = max(1, int(self.capture.audio_rate * self.segment.max_segment_sec))
+        self.current_segment: dict | None = None
+
+    def _validate_threshold(self, value: float, name: str) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be between 0.0 and 1.0")
+        return value
 
     def run(self) -> None:
         for directory in [
@@ -59,7 +79,6 @@ class SegmentWriter:
         self.stats["segmenter_running"] = True
         self.stats["session_id"] = self.session_id
         self.stats["session_start_utc_ms"] = self.session_start_utc_ms
-        buffer = bytearray()
         log.info("Segment writer waiting on FIFO %s", self.fifo_path)
         try:
             with self.fifo_path.open("rb", buffering=0) as handle:
@@ -67,46 +86,114 @@ class SegmentWriter:
                     chunk = handle.read(4096)
                     if not chunk:
                         continue
-                    buffer.extend(chunk)
-                    while len(buffer) >= self.bytes_per_segment:
-                        payload = bytes(buffer[: self.bytes_per_segment])
-                        del buffer[: self.bytes_per_segment]
-                        self._flush_segment(payload)
+                    self._process_chunk(chunk)
         finally:
+            if self.current_segment is not None:
+                self._close_segment()
             self.stats["segmenter_running"] = False
             if self.fifo_path.exists():
                 self.fifo_path.unlink()
 
-    def _flush_segment(self, payload: bytes) -> None:
-        segment_start_utc_ms = self.session_start_utc_ms + self.sequence * self.segment.duration_sec * 1000
-        segment_id = (
-            f"{self.segment.stream_id}-{segment_start_utc_ms}-{self.sequence:06d}"
-        )
-        wav_tmp = self.tmp_dir / f"{segment_id}.wav.tmp"
-        wav_path = self.ready_dir / f"{segment_id}.wav"
-        meta_tmp = self.tmp_dir / f"{segment_id}.json.tmp"
-        meta_path = self.ready_dir / f"{segment_id}.json"
-        with wave.open(str(wav_tmp), "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(self.bytes_per_sample)
-            wav_file.setframerate(self.capture.audio_rate)
-            wav_file.writeframes(payload)
+    def _process_chunk(self, chunk: bytes) -> None:
+        self.pending_bytes.extend(chunk)
+        usable_bytes = len(self.pending_bytes) - (len(self.pending_bytes) % self.bytes_per_sample)
+        if usable_bytes <= 0:
+            return
+        payload = bytes(self.pending_bytes[:usable_bytes])
+        del self.pending_bytes[:usable_bytes]
+        chunk_samples = len(payload) // self.bytes_per_sample
+        raw_chunk_start_sample = self.total_samples
+        raw_chunk_end_sample = raw_chunk_start_sample + chunk_samples
+        chunk_start_sample = raw_chunk_start_sample
+        chunk_end_sample = raw_chunk_end_sample
+        threshold = self.stop_threshold if self.current_segment is not None else self.start_threshold
+        active_offsets = self._active_offsets(payload, threshold)
+        active = active_offsets is not None
 
+        if self.current_segment is None and active:
+            start_offset, _ = active_offsets
+            chunk_start_sample += start_offset
+            payload = payload[start_offset * self.bytes_per_sample :]
+            chunk_samples = len(payload) // self.bytes_per_sample
+            chunk_end_sample = chunk_start_sample + chunk_samples
+            self._open_segment(chunk_start_sample)
+
+        if self.current_segment is not None:
+            self.current_segment["wav_file"].writeframes(payload)
+            self.current_segment["samples_written"] += chunk_samples
+            self.current_segment["last_sample"] = chunk_end_sample
+            if active:
+                _, last_offset = active_offsets
+                self.current_segment["last_active_sample"] = raw_chunk_start_sample + last_offset + 1
+            silence_samples = chunk_end_sample - self.current_segment["last_active_sample"]
+            reached_max = self.current_segment["samples_written"] >= self.max_segment_samples
+            if silence_samples >= self.min_silence_samples or reached_max:
+                self._close_segment()
+
+        self.total_samples = raw_chunk_end_sample
+
+    def _active_offsets(self, payload: bytes, threshold: float) -> tuple[int, int] | None:
+        samples = np.frombuffer(payload, dtype="<i2").astype(np.int32)
+        if samples.size == 0:
+            return None
+        limit = int(threshold * 32767.0)
+        active_indexes = np.flatnonzero(np.abs(samples) >= limit)
+        if active_indexes.size == 0:
+            return None
+        return int(active_indexes[0]), int(active_indexes[-1])
+
+    def _open_segment(self, start_sample: int) -> None:
+        segment_start_utc_ms = self.session_start_utc_ms + int(start_sample * 1000 / self.capture.audio_rate)
+        segment_id = f"{self.segment.stream_id}-{segment_start_utc_ms}-{self.sequence:06d}"
+        wav_tmp = self.tmp_dir / f"{segment_id}.wav.tmp"
+        wav_file = wave.open(str(wav_tmp), "wb")
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(self.bytes_per_sample)
+        wav_file.setframerate(self.capture.audio_rate)
+        self.current_segment = {
+            "segment_id": segment_id,
+            "segment_start_utc_ms": segment_start_utc_ms,
+            "start_sample": start_sample,
+            "last_active_sample": start_sample,
+            "last_sample": start_sample,
+            "samples_written": 0,
+            "wav_tmp": wav_tmp,
+            "wav_path": self.ready_dir / f"{segment_id}.wav",
+            "meta_tmp": self.tmp_dir / f"{segment_id}.json.tmp",
+            "meta_path": self.ready_dir / f"{segment_id}.json",
+            "wav_file": wav_file,
+        }
+        self.stats["current_segment_id"] = segment_id
+
+    def _close_segment(self) -> None:
+        assert self.current_segment is not None
+        segment = self.current_segment
+        segment["wav_file"].close()
+        duration_ms = int((segment["samples_written"] * 1000) / self.capture.audio_rate)
         metadata = {
             "session_id": self.session_id,
+            "session_start_utc_ms": self.session_start_utc_ms,
             "stream_id": self.segment.stream_id,
-            "segment_id": segment_id,
+            "segment_id": segment["segment_id"],
             "sequence": self.sequence,
-            "segment_start_utc_ms": segment_start_utc_ms,
-            "duration_ms": self.segment.duration_sec * 1000,
+            "segment_start_utc_ms": segment["segment_start_utc_ms"],
+            "duration_ms": duration_ms,
             "sample_rate": self.capture.audio_rate,
             "channels": 1,
             "sample_format": "s16le",
             "freq_hz": self.capture.freq_hz,
         }
-        meta_tmp.write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
-        wav_tmp.replace(wav_path)
-        meta_tmp.replace(meta_path)
-        self.stats["last_segment_sequence"] = self.sequence
-        self.stats["last_segment_id"] = segment_id
-        self.sequence += 1
+        if segment["samples_written"] < self.min_segment_samples:
+            segment["wav_tmp"].unlink(missing_ok=True)
+            segment["meta_tmp"].unlink(missing_ok=True)
+            self.stats["last_discarded_segment_id"] = segment["segment_id"]
+        else:
+            segment["meta_tmp"].write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
+            segment["wav_tmp"].replace(segment["wav_path"])
+            segment["meta_tmp"].replace(segment["meta_path"])
+            self.stats["last_segment_sequence"] = self.sequence
+            self.stats["last_segment_id"] = segment["segment_id"]
+            self.stats["last_segment_duration_ms"] = duration_ms
+            self.sequence += 1
+        self.stats.pop("current_segment_id", None)
+        self.current_segment = None
