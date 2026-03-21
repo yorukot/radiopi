@@ -89,18 +89,23 @@ class SegmentWriter:
         self.stats["activity_stop_threshold"] = self.stop_threshold
         self.stats["activity_min_silence_ms"] = self.segment.min_silence_ms
         log.info("Segment writer waiting on FIFO %s", self.fifo_path)
+        fifo_fd = os.open(self.fifo_path, os.O_RDONLY | os.O_NONBLOCK)
         try:
-            with self.fifo_path.open("rb", buffering=0) as handle:
-                while not self.stop_event.is_set():
-                    chunk = handle.read(4096)
-                    if not chunk:
-                        self._maybe_log_no_pcm()
-                        continue
-                    if not self.seen_pcm:
-                        self.seen_pcm = True
-                        log.info("Received first PCM chunk from capture FIFO")
-                    self._process_chunk(chunk)
+            while not self.stop_event.is_set():
+                try:
+                    chunk = os.read(fifo_fd, 4096)
+                except BlockingIOError:
+                    chunk = b""
+                if not chunk:
+                    self._maybe_log_no_pcm()
+                    self.stop_event.wait(0.1)
+                    continue
+                if not self.seen_pcm:
+                    self.seen_pcm = True
+                    log.info("Received first PCM chunk from capture FIFO")
+                self._process_chunk(chunk)
         finally:
+            os.close(fifo_fd)
             if self.current_segment is not None:
                 self._close_segment()
             self.stats["segmenter_running"] = False
