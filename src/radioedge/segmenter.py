@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import threading
 import wave
@@ -57,6 +58,8 @@ class SegmentWriter:
         self.max_segment_samples = max(1, int(self.capture.audio_rate * self.segment.max_segment_sec))
         self.current_segment: dict | None = None
         self.stats["signal_active"] = False
+        self.level_log_interval_ms = 2000
+        self.last_level_log_ms = 0
 
     def _validate_threshold(self, value: float, name: str) -> float:
         if not 0.0 <= value <= 1.0:
@@ -113,6 +116,9 @@ class SegmentWriter:
         threshold = self.stop_threshold if self.current_segment is not None else self.start_threshold
         active_offsets = self._active_offsets(payload, threshold)
         active = active_offsets is not None
+        level_dbfs = self._chunk_level_dbfs(payload)
+        self.stats["current_level_dbfs"] = round(level_dbfs, 1)
+        self._maybe_log_level(level_dbfs, active)
 
         if self.current_segment is None and active:
             start_offset, _ = active_offsets
@@ -145,6 +151,33 @@ class SegmentWriter:
         if active_indexes.size == 0:
             return None
         return int(active_indexes[0]), int(active_indexes[-1])
+
+    def _chunk_level_dbfs(self, payload: bytes) -> float:
+        samples = np.frombuffer(payload, dtype="<i2").astype(np.int32)
+        if samples.size == 0:
+            return -120.0
+        peak = int(np.max(np.abs(samples)))
+        if peak <= 0:
+            return -120.0
+        return max(-120.0, 20.0 * math.log10(peak / 32767.0))
+
+    def _maybe_log_level(self, level_dbfs: float, active: bool) -> None:
+        now_ms = now_utc_ms()
+        if now_ms - self.last_level_log_ms < self.level_log_interval_ms:
+            return
+        self.last_level_log_ms = now_ms
+        log.info(
+            "Audio level=%.1f dBFS signal_active=%s start_threshold=%.1f dBFS stop_threshold=%.1f dBFS",
+            level_dbfs,
+            active,
+            self._threshold_dbfs(self.start_threshold),
+            self._threshold_dbfs(self.stop_threshold),
+        )
+
+    def _threshold_dbfs(self, threshold: float) -> float:
+        if threshold <= 0.0:
+            return -120.0
+        return max(-120.0, 20.0 * math.log10(threshold))
 
     def _open_segment(self, start_sample: int) -> None:
         segment_start_utc_ms = self.session_start_utc_ms + int(start_sample * 1000 / self.capture.audio_rate)
