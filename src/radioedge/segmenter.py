@@ -60,6 +60,8 @@ class SegmentWriter:
         self.stats["signal_active"] = False
         self.level_log_interval_ms = 2000
         self.last_level_log_ms = 0
+        self.last_no_pcm_log_ms = 0
+        self.seen_pcm = False
 
     def _validate_threshold(self, value: float, name: str) -> float:
         if not 0.0 <= value <= 1.0:
@@ -92,7 +94,11 @@ class SegmentWriter:
                 while not self.stop_event.is_set():
                     chunk = handle.read(4096)
                     if not chunk:
+                        self._maybe_log_no_pcm()
                         continue
+                    if not self.seen_pcm:
+                        self.seen_pcm = True
+                        log.info("Received first PCM chunk from capture FIFO")
                     self._process_chunk(chunk)
         finally:
             if self.current_segment is not None:
@@ -173,6 +179,13 @@ class SegmentWriter:
             self._threshold_dbfs(self.start_threshold),
             self._threshold_dbfs(self.stop_threshold),
         )
+
+    def _maybe_log_no_pcm(self) -> None:
+        now_ms = now_utc_ms()
+        if now_ms - self.last_no_pcm_log_ms < self.level_log_interval_ms:
+            return
+        self.last_no_pcm_log_ms = now_ms
+        log.info("Waiting for PCM samples from capture FIFO")
 
     def _threshold_dbfs(self, threshold: float) -> float:
         if threshold <= 0.0:
