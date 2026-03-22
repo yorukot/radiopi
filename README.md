@@ -139,6 +139,8 @@ What the server does:
 - stores WAV and metadata durably before acknowledging
 - queues jobs in SQLite
 - keeps one `faster-whisper` model loaded in memory
+- pins `faster-whisper` to Chinese (`asr.language: "zh"`) instead of auto-detecting
+- converts `faster-whisper` Chinese output from Simplified to Traditional with OpenCC (`asr.opencc_config`)
 - writes raw ASR JSON and canonical daily JSONL transcripts
 - builds 10-minute merged WAV and SRT archives
 - optionally sends each transcribed line to Telegram as a plain chat message

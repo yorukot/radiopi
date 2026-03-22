@@ -18,7 +18,8 @@ asr:
   model: "turbo"
   device: "cuda"
   compute_type: "float16"
-  language: null
+  language: "zh"
+  opencc_config: "s2t"
   beam_size: 5
   vad_filter: false
   condition_on_previous_text: false

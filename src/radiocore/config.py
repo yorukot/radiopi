@@ -34,7 +34,8 @@ class AsrSettings:
     model: str = "turbo"
     device: str = "cuda"
     compute_type: str = "float16"
-    language: str | None = None
+    language: str | None = "zh"
+    opencc_config: str | None = "s2t"
     beam_size: int = 5
     vad_filter: bool = False
     condition_on_previous_text: bool = False

@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.28",
     "pyadi-iio>=0.0.14",
     "numpy>=1.24",
+    "opencc-python-reimplemented>=0.1.7",
     "python-multipart>=0.0.20",
     "PyYAML>=6.0",
     "scipy>=1.11",

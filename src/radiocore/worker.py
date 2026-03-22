@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 
 from faster_whisper import WhisperModel
+from opencc import OpenCC
 
 from radiocommon import now_utc_ms
 
@@ -29,6 +30,7 @@ class CoreWorker:
             device=self.config.asr.device,
             compute_type=self.config.asr.compute_type,
         )
+        self.opencc = OpenCC(self.config.asr.opencc_config) if self.config.asr.opencc_config else None
         self.notifier = TelegramNotifier(config.telegram)
         self.health_path = Path(config.data.worker_health_path)
         self.health_path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,15 +71,16 @@ class CoreWorker:
                 "segments": [],
             }
             for item in segments:
+                converted_text = self._convert_text(item.text)
                 raw_payload["segments"].append(
                     {
                         "id": item.id,
                         "start": item.start,
                         "end": item.end,
-                        "text": item.text,
+                        "text": converted_text,
                         "words": [
                             {
-                                "word": word.word,
+                                "word": self._convert_text(word.word),
                                 "start": word.start,
                                 "end": word.end,
                                 "probability": word.probability,
@@ -86,7 +89,7 @@ class CoreWorker:
                         ],
                     }
                 )
-                text = item.text.strip()
+                text = converted_text.strip()
                 if not text:
                     continue
                 rel_start_ms = int(item.start * 1000)
@@ -160,6 +163,11 @@ class CoreWorker:
         tmp_path = self.health_path.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(snapshot, ensure_ascii=True, indent=2), encoding="utf-8")
         tmp_path.replace(self.health_path)
+
+    def _convert_text(self, text: str) -> str:
+        if not text or self.opencc is None:
+            return text
+        return self.opencc.convert(text)
 
     def _install_signal_handlers(self) -> None:
         def handle_signal(signum, _frame) -> None:
