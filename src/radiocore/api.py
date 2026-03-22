@@ -26,7 +26,6 @@ def create_app(config: CoreConfig) -> FastAPI:
         config.data.raw_asr_dir,
         config.data.transcripts_dir,
         config.data.archives_dir,
-        config.data.telegram_dir,
     ]:
         Path(directory).mkdir(parents=True, exist_ok=True)
 

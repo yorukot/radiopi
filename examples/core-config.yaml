@@ -12,7 +12,6 @@ data:
   raw_asr_dir: "./data/raw_asr"
   transcripts_dir: "./data/transcripts"
   archives_dir: "./data/archives"
-  telegram_dir: "./data/telegram"
   worker_health_path: "./data/worker-status.json"
 
 asr:
@@ -31,5 +30,4 @@ telegram:
   enabled: false
   bot_token: ""
   chat_id: ""
-  send_audio: false
   timeout_sec: 30.0

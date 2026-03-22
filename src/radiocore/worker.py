@@ -12,7 +12,6 @@ from radiocommon import now_utc_ms
 from .config import CoreConfig
 from .db import Database
 from .notifier import TelegramNotifier
-from .notifier import build_window_summary
 from .windows import merge_wavs
 from .windows import write_srt
 
@@ -42,9 +41,9 @@ class CoreWorker:
             if segment:
                 worked = True
                 self._transcribe_segment(segment)
-            if self._build_ready_windows():
+            if self._notify_ready_transcript_items():
                 worked = True
-            if self._notify_ready_windows():
+            if self._build_ready_windows():
                 worked = True
             self._write_health()
             if not worked:
@@ -138,19 +137,19 @@ class CoreWorker:
             worked = True
         return worked
 
-    def _notify_ready_windows(self) -> bool:
+    def _notify_ready_transcript_items(self) -> bool:
         worked = False
-        for window in self.db.list_pending_notifications():
-            transcript_items = self.db.fetch_window_transcript_items(
-                [segment["id"] for segment in self.db.fetch_window_segments(window["stream_id"], window["window_start_utc_ms"], self.config.asr.window_sec * 1000)]
-            )
-            summary = build_window_summary(window, transcript_items)
+        for item in self.db.list_pending_transcript_notifications():
+            text = item["text"].strip()
+            if not text:
+                self.db.mark_transcript_item_notified(item["id"])
+                continue
             try:
-                self.notifier.send_window(window, summary)
-                self.db.mark_window_notified(window["id"], self.config.asr.window_sec * 1000)
+                self.notifier.send_message(text)
+                self.db.mark_transcript_item_notified(item["id"])
             except Exception as exc:
-                log.exception("Telegram send failed for %s", window["id"])
-                self.db.mark_window_notify_failed(window["id"], str(exc))
+                log.exception("Telegram send failed for transcript item %s", item["id"])
+                self.db.mark_transcript_item_notify_failed(item["id"], str(exc))
             worked = True
         return worked
 

@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from dataclasses import fields
 from pathlib import Path
+from typing import Any
 
 from radiocommon import load_config
 
@@ -46,7 +48,6 @@ class TelegramSettings:
     enabled: bool = False
     bot_token: str = ""
     chat_id: str = ""
-    send_audio: bool = False
     timeout_sec: float = 30.0
 
 
@@ -62,9 +63,14 @@ class CoreConfig:
     def from_file(cls, path: str | Path) -> "CoreConfig":
         raw = load_config(path)
         return cls(
-            api=ApiSettings(**raw.get("api", {})),
-            database=DatabaseSettings(**raw.get("database", {})),
-            data=DataSettings(**raw.get("data", {})),
-            asr=AsrSettings(**raw.get("asr", {})),
-            telegram=TelegramSettings(**raw.get("telegram", {})),
+            api=_build_settings(ApiSettings, raw.get("api", {})),
+            database=_build_settings(DatabaseSettings, raw.get("database", {})),
+            data=_build_settings(DataSettings, raw.get("data", {})),
+            asr=_build_settings(AsrSettings, raw.get("asr", {})),
+            telegram=_build_settings(TelegramSettings, raw.get("telegram", {})),
         )
+
+
+def _build_settings(settings_type: type[Any], raw: dict[str, Any]) -> Any:
+    allowed = {field.name for field in fields(settings_type)}
+    return settings_type(**{key: value for key, value in raw.items() if key in allowed})

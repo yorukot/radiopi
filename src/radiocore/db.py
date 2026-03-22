@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS segments(
   wav_path TEXT NOT NULL,
   metadata_path TEXT NOT NULL,
   status TEXT NOT NULL,
+  telegram_status TEXT NOT NULL DEFAULT 'pending',
+  telegram_error_text TEXT,
   attempts INTEGER NOT NULL DEFAULT 0,
   asr_json_path TEXT,
   error_text TEXT,
@@ -37,7 +39,9 @@ CREATE TABLE IF NOT EXISTS transcript_items(
   rel_end_ms INTEGER NOT NULL,
   abs_start_ms INTEGER NOT NULL,
   abs_end_ms INTEGER NOT NULL,
-  text TEXT NOT NULL
+  text TEXT NOT NULL,
+  telegram_status TEXT NOT NULL DEFAULT 'pending',
+  telegram_error_text TEXT
 );
 
 CREATE TABLE IF NOT EXISTS windows(
@@ -70,6 +74,16 @@ class Database:
     def _init_db(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            self._ensure_column(conn, "segments", "telegram_status", "TEXT NOT NULL DEFAULT 'pending'")
+            self._ensure_column(conn, "segments", "telegram_error_text", "TEXT")
+            self._ensure_column(conn, "transcript_items", "telegram_status", "TEXT NOT NULL DEFAULT 'pending'")
+            self._ensure_column(conn, "transcript_items", "telegram_error_text", "TEXT")
+
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if any(row["name"] == column for row in rows):
+            return
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def insert_received_segment(
         self,
@@ -93,7 +107,7 @@ class Database:
                 ),
             )
             conn.execute(
-                "INSERT INTO segments(id, session_id, stream_id, sequence, segment_start_utc_ms, duration_ms, wav_path, metadata_path, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                "INSERT INTO segments(id, session_id, stream_id, sequence, segment_start_utc_ms, duration_ms, wav_path, metadata_path, status, telegram_status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'pending', ?, ?)",
                 (
                     metadata["segment_id"],
                     metadata["session_id"],
@@ -136,7 +150,7 @@ class Database:
         now_iso = iso_utc_from_ms(now_utc_ms())
         with self.connect() as conn:
             conn.executemany(
-                "INSERT INTO transcript_items(segment_id, rel_start_ms, rel_end_ms, abs_start_ms, abs_end_ms, text) VALUES(?, ?, ?, ?, ?, ?)",
+                "INSERT INTO transcript_items(segment_id, rel_start_ms, rel_end_ms, abs_start_ms, abs_end_ms, text, telegram_status) VALUES(?, ?, ?, ?, ?, ?, 'pending')",
                 [
                     (
                         segment_id,
@@ -228,6 +242,27 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_pending_transcript_notifications(self) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM transcript_items WHERE telegram_status = 'pending' ORDER BY abs_start_ms, abs_end_ms, id"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_transcript_item_notified(self, item_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE transcript_items SET telegram_status = 'sent', telegram_error_text = NULL WHERE id = ?",
+                (item_id,),
+            )
+
+    def mark_transcript_item_notify_failed(self, item_id: int, error_text: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE transcript_items SET telegram_status = 'failed', telegram_error_text = ? WHERE id = ?",
+                (error_text, item_id),
+            )
+
     def mark_window_built(self, window_id: str, wav_path: str, srt_path: str, window_ms: int) -> None:
         now_iso = iso_utc_from_ms(now_utc_ms())
         with self.connect() as conn:
@@ -238,33 +273,6 @@ class Database:
             conn.execute(
                 "UPDATE segments SET status = 'window_built', updated_at = ? WHERE stream_id = (SELECT stream_id FROM windows WHERE id = ?) AND segment_start_utc_ms >= (SELECT window_start_utc_ms FROM windows WHERE id = ?) AND segment_start_utc_ms < (SELECT window_start_utc_ms + ? FROM windows WHERE id = ?)",
                 (now_iso, window_id, window_id, window_ms, window_id),
-            )
-
-    def list_pending_notifications(self) -> list[dict]:
-        with self.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM windows WHERE srt_path IS NOT NULL AND telegram_status = 'pending' ORDER BY window_start_utc_ms"
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def mark_window_notified(self, window_id: str, window_ms: int) -> None:
-        now_iso = iso_utc_from_ms(now_utc_ms())
-        with self.connect() as conn:
-            conn.execute(
-                "UPDATE windows SET telegram_status = 'sent', telegram_error_text = NULL, updated_at = ? WHERE id = ?",
-                (now_iso, window_id),
-            )
-            conn.execute(
-                "UPDATE segments SET status = 'notified', updated_at = ? WHERE stream_id = (SELECT stream_id FROM windows WHERE id = ?) AND segment_start_utc_ms >= (SELECT window_start_utc_ms FROM windows WHERE id = ?) AND segment_start_utc_ms < (SELECT window_start_utc_ms + ? FROM windows WHERE id = ?)",
-                (now_iso, window_id, window_id, window_ms, window_id),
-            )
-
-    def mark_window_notify_failed(self, window_id: str, error_text: str) -> None:
-        now_iso = iso_utc_from_ms(now_utc_ms())
-        with self.connect() as conn:
-            conn.execute(
-                "UPDATE windows SET telegram_status = 'failed', telegram_error_text = ?, updated_at = ? WHERE id = ?",
-                (error_text, now_iso, window_id),
             )
 
     def stats_snapshot(self) -> dict:

@@ -141,7 +141,7 @@ What the server does:
 - keeps one `faster-whisper` model loaded in memory
 - writes raw ASR JSON and canonical daily JSONL transcripts
 - builds 10-minute merged WAV and SRT archives
-- optionally sends Telegram summaries and files
+- optionally sends each transcribed line to Telegram as a plain chat message
 
 Health endpoints:
 
@@ -156,8 +156,12 @@ data/
   raw_asr/
   transcripts/
   archives/
-  telegram/
 ```
+
+Telegram delivery:
+
+- when `telegram.enabled: true`, the worker sends each non-empty transcribed line as its own Telegram message
+- the worker only uses `sendMessage`; it does not upload SRT or WAV files
 
 ## Smoke Test Flow
 
