@@ -4,17 +4,18 @@ import io
 import logging
 from pathlib import Path
 
+import iio as libiio
 from scipy import signal
 from gnuradio import analog
 from gnuradio import blocks
 from gnuradio import fft
 from gnuradio import filter
 from gnuradio import gr
-from gnuradio import iio
+from gnuradio import iio as gr_iio
 from gnuradio.filter import firdes
 
 
-DEFAULT_URI = "usb:1.2.5"
+DEFAULT_URI = "auto"
 DEFAULT_FREQ = 430_230_000
 DEFAULT_SAMPLE_RATE = 1_008_000
 DEFAULT_QUAD_RATE = 240_000
@@ -25,15 +26,17 @@ DEFAULT_OUTPUT = "record.wav"
 DEFAULT_RF_SQUELCH_DB = -30.0
 DEFAULT_RF_SQUELCH_ALPHA = 1e-3
 DEFAULT_FM_SQUELCH_THRESHOLD = -1.0
-DEFAULT_AUDIO_HPF_CUTOFF = 300.0
-DEFAULT_CTCSS_FREQ = 156.7
+DEFAULT_AUDIO_HPF_CUTOFF = 350.0
+DEFAULT_CTCSS_FREQ = 0.0
 DEFAULT_CTCSS_Q = 30.0
 DEFAULT_AUDIO_GAIN = 0.7
 
 
 def design_audio_hpf_taps(audio_rate: int, cutoff_hz: float) -> list[float]:
-    transition_hz = 100.0
-    attenuation_db = 90.0
+    if cutoff_hz <= 0:
+        raise ValueError("audio_hpf_cutoff must be greater than zero")
+    transition_hz = 75.0
+    attenuation_db = 100.0
     width = transition_hz / (audio_rate / 2.0)
     ntaps, beta = signal.kaiserord(attenuation_db, width)
     if ntaps % 2 == 0:
@@ -48,7 +51,9 @@ def design_audio_hpf_taps(audio_rate: int, cutoff_hz: float) -> list[float]:
     return taps.tolist()
 
 
-def design_ctcss_notch_taps(audio_rate: int, tone_hz: float, q_factor: float) -> list[float]:
+def design_ctcss_notch_taps(
+    audio_rate: int, tone_hz: float, q_factor: float
+) -> list[float]:
     if q_factor <= 0:
         raise ValueError("ctcss_q must be greater than zero")
     stop_width_hz = max(3.0, tone_hz / (2.0 * q_factor))
@@ -67,6 +72,56 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 log = logging.getLogger("pluto-gnuradio-recorder")
+
+
+def _scan_pluto_contexts() -> dict[str, str]:
+    try:
+        contexts = libiio.scan_contexts()
+    except Exception:
+        log.exception("Failed to scan libiio contexts")
+        return {}
+    return {
+        uri: description
+        for uri, description in contexts.items()
+        if "pluto" in description.lower()
+    }
+
+
+def resolve_pluto_uri(uri: str) -> str:
+    requested = uri.strip()
+    contexts = _scan_pluto_contexts()
+    if requested in contexts:
+        return requested
+
+    candidates = sorted(contexts)
+    if requested in {"", "auto", "usb", "usb:"}:
+        if len(candidates) == 1:
+            resolved = candidates[0]
+            log.info("Resolved PlutoSDR URI %r to %s", requested or "auto", resolved)
+            return resolved
+        if not candidates:
+            raise RuntimeError("No PlutoSDR contexts found via libiio scan")
+        raise RuntimeError(
+            "Multiple PlutoSDR contexts found; set capture.uri explicitly to one of: "
+            + ", ".join(candidates)
+        )
+
+    if requested.startswith("usb:") and len(candidates) == 1:
+        resolved = candidates[0]
+        log.warning(
+            "Requested PlutoSDR URI %s was not found; using detected device %s instead",
+            requested,
+            resolved,
+        )
+        return resolved
+
+    if not candidates:
+        raise RuntimeError(
+            f"Requested PlutoSDR URI {requested!r} was not found and no PlutoSDR contexts were detected"
+        )
+    raise RuntimeError(
+        f"Requested PlutoSDR URI {requested!r} was not found; available PlutoSDR contexts: {', '.join(candidates)}"
+    )
 
 
 class BaseNfmFlowgraph:
@@ -91,8 +146,13 @@ class BaseNfmFlowgraph:
         if quad_rate % audio_rate != 0:
             raise ValueError("quad_rate must be an integer multiple of audio_rate")
 
-        if ctcss_freq <= 0:
-            raise ValueError("ctcss_freq must be greater than zero")
+        if ctcss_freq < 0:
+            raise ValueError("ctcss_freq must be zero or greater")
+
+        if ctcss_freq > 0 and ctcss_q <= 0:
+            raise ValueError(
+                "ctcss_q must be greater than zero when CTCSS notch is enabled"
+            )
 
         log.info(
             "Initializing NFM flowgraph freq=%.3fMHz sample_rate=%.3fMHz quad_rate=%.1fkHz audio_rate=%sHz",
@@ -102,17 +162,19 @@ class BaseNfmFlowgraph:
             audio_rate,
         )
         log.info(
-            "Flowgraph filters rf_squelch=%s fm_squelch=%s ctcss=%.1fHz(q=%.1f) audio_hpf=%.1fHz gain=%.2f",
+            "Flowgraph filters rf_squelch=%s fm_squelch=%s ctcss=%s audio_hpf=%.1fHz gain=%.2f",
             f"{rf_squelch_db:.1f}dB" if rf_squelch_db >= -50.0 else "disabled",
-            f"{fm_squelch_threshold:.2f}" if fm_squelch_threshold >= 0.0 else "disabled",
-            ctcss_freq,
-            ctcss_q,
+            f"{fm_squelch_threshold:.2f}"
+            if fm_squelch_threshold >= 0.0
+            else "disabled",
+            f"{ctcss_freq:.1f}Hz(q={ctcss_q:.1f})" if ctcss_freq > 0 else "disabled",
             audio_hpf_cutoff,
             audio_gain,
         )
-        log.info("Connecting to PlutoSDR: %s", uri)
-        self.source = iio.fmcomms2_source_fc32(
-            uri, [True, True, False, False], buffer_size
+        resolved_uri = resolve_pluto_uri(uri)
+        log.info("Connecting to PlutoSDR: %s", resolved_uri)
+        self.source = gr_iio.fmcomms2_source_fc32(
+            resolved_uri, [True, True, False, False], buffer_size
         )
         self.source.set_len_tag_key("packet_len")
         self.source.set_samplerate(sample_rate)
@@ -153,10 +215,12 @@ class BaseNfmFlowgraph:
             1,
             design_audio_hpf_taps(audio_rate, audio_hpf_cutoff),
         )
-        self.ctcss_notch = filter.fir_filter_fff(
-            1,
-            design_ctcss_notch_taps(audio_rate, ctcss_freq, ctcss_q),
-        )
+        self.ctcss_notch = None
+        if ctcss_freq > 0:
+            self.ctcss_notch = filter.fir_filter_fff(
+                1,
+                design_ctcss_notch_taps(audio_rate, ctcss_freq, ctcss_q),
+            )
         self.audio_gain = blocks.multiply_const_ff(audio_gain)
 
         if self.rf_squelch is not None:
@@ -172,21 +236,36 @@ class BaseNfmFlowgraph:
         if fm_squelch_threshold >= 0.0:
             self.fm_squelch = analog.standard_squelch(audio_rate)
             self.fm_squelch.set_threshold(fm_squelch_threshold)
-            self.tb.connect(
-                self.nbfm,
-                self.fm_squelch,
-                self.ctcss_notch,
-                self.audio_hpf,
-                self.audio_gain,
-            )
+            if self.ctcss_notch is not None:
+                self.tb.connect(
+                    self.nbfm,
+                    self.fm_squelch,
+                    self.ctcss_notch,
+                    self.audio_hpf,
+                    self.audio_gain,
+                )
+            else:
+                self.tb.connect(
+                    self.nbfm,
+                    self.fm_squelch,
+                    self.audio_hpf,
+                    self.audio_gain,
+                )
         else:
             self.fm_squelch = None
-            self.tb.connect(
-                self.nbfm,
-                self.ctcss_notch,
-                self.audio_hpf,
-                self.audio_gain,
-            )
+            if self.ctcss_notch is not None:
+                self.tb.connect(
+                    self.nbfm,
+                    self.ctcss_notch,
+                    self.audio_hpf,
+                    self.audio_gain,
+                )
+            else:
+                self.tb.connect(
+                    self.nbfm,
+                    self.audio_hpf,
+                    self.audio_gain,
+                )
         log.info("NFM flowgraph ready")
 
     def connect_audio_sink(self, sink) -> None:
@@ -374,7 +453,7 @@ def parse_args() -> argparse.Namespace:
         "--ctcss-freq",
         type=float,
         default=DEFAULT_CTCSS_FREQ,
-        help="CTCSS notch center frequency in Hz",
+        help="CTCSS notch center frequency in Hz; set to 0 to disable",
     )
     parser.add_argument(
         "--ctcss-q",
@@ -410,7 +489,10 @@ def main() -> int:
     else:
         log.info("  FM Squelch  : disabled")
     log.info("  Audio HPF   : %.1f Hz", args.audio_hpf_cutoff)
-    log.info("  CTCSS Notch : %.1f Hz (Q=%.1f)", args.ctcss_freq, args.ctcss_q)
+    if args.ctcss_freq > 0:
+        log.info("  CTCSS Notch : %.1f Hz (Q=%.1f)", args.ctcss_freq, args.ctcss_q)
+    else:
+        log.info("  CTCSS Notch : disabled")
     log.info("  Audio Gain  : %.1f", args.audio_gain)
     log.info("  Output      : %s", args.output)
 
