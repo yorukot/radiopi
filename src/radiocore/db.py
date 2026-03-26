@@ -74,12 +74,21 @@ class Database:
     def _init_db(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
-            self._ensure_column(conn, "segments", "telegram_status", "TEXT NOT NULL DEFAULT 'pending'")
+            self._ensure_column(
+                conn, "segments", "telegram_status", "TEXT NOT NULL DEFAULT 'pending'"
+            )
             self._ensure_column(conn, "segments", "telegram_error_text", "TEXT")
-            self._ensure_column(conn, "transcript_items", "telegram_status", "TEXT NOT NULL DEFAULT 'pending'")
+            self._ensure_column(
+                conn,
+                "transcript_items",
+                "telegram_status",
+                "TEXT NOT NULL DEFAULT 'pending'",
+            )
             self._ensure_column(conn, "transcript_items", "telegram_error_text", "TEXT")
 
-    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    def _ensure_column(
+        self, conn: sqlite3.Connection, table: str, column: str, definition: str
+    ) -> None:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
         if any(row["name"] == column for row in rows):
             return
@@ -95,7 +104,9 @@ class Database:
         now_iso = iso_utc_from_ms(now_utc_ms())
         window_ms_value = window_start_ms(metadata["segment_start_utc_ms"], window_ms)
         window_id = f"{metadata['stream_id']}-{window_ms_value}"
-        session_start_utc_ms = metadata.get("session_start_utc_ms", metadata["segment_start_utc_ms"])
+        session_start_utc_ms = metadata.get(
+            "session_start_utc_ms", metadata["segment_start_utc_ms"]
+        )
         with self.connect() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO sessions(id, stream_id, session_start_utc_ms, created_at) VALUES(?, ?, ?, ?)",
@@ -129,7 +140,9 @@ class Database:
 
     def segment_exists(self, segment_id: str) -> bool:
         with self.connect() as conn:
-            row = conn.execute("SELECT 1 FROM segments WHERE id = ?", (segment_id,)).fetchone()
+            row = conn.execute(
+                "SELECT 1 FROM segments WHERE id = ?", (segment_id,)
+            ).fetchone()
         return row is not None
 
     def pop_next_queued_segment(self):
@@ -146,7 +159,9 @@ class Database:
             )
             return dict(row)
 
-    def complete_transcription(self, segment_id: str, asr_json_path: str, items: list[dict]) -> None:
+    def complete_transcription(
+        self, segment_id: str, asr_json_path: str, items: list[dict]
+    ) -> None:
         now_iso = iso_utc_from_ms(now_utc_ms())
         with self.connect() as conn:
             conn.executemany(
@@ -176,7 +191,9 @@ class Database:
                 (error_text, now_iso, segment_id),
             )
 
-    def append_daily_jsonl(self, transcripts_dir: str | Path, items: list[dict]) -> None:
+    def append_daily_jsonl(
+        self, transcripts_dir: str | Path, items: list[dict]
+    ) -> None:
         root = Path(transcripts_dir)
         root.mkdir(parents=True, exist_ok=True)
         by_date: dict[str, list[dict]] = {}
@@ -195,7 +212,9 @@ class Database:
                     }
                     handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-    def list_buildable_windows(self, now_ms: int, window_ms: int, close_grace_ms: int) -> list[dict]:
+    def list_buildable_windows(
+        self, now_ms: int, window_ms: int, close_grace_ms: int
+    ) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM windows WHERE srt_path IS NULL AND ? >= window_start_utc_ms + ? + ?",
@@ -223,7 +242,9 @@ class Database:
                     result.append(dict(row))
         return result
 
-    def fetch_window_segments(self, stream_id: str, window_start: int, window_ms: int) -> list[dict]:
+    def fetch_window_segments(
+        self, stream_id: str, window_start: int, window_ms: int
+    ) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM segments WHERE stream_id = ? AND segment_start_utc_ms >= ? AND segment_start_utc_ms < ? ORDER BY segment_start_utc_ms, sequence",
@@ -245,7 +266,7 @@ class Database:
     def list_pending_transcript_notifications(self) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM transcript_items WHERE telegram_status = 'pending' ORDER BY abs_start_ms, abs_end_ms, id"
+                "SELECT transcript_items.*, segments.stream_id FROM transcript_items JOIN segments ON segments.id = transcript_items.segment_id WHERE transcript_items.telegram_status = 'pending' ORDER BY transcript_items.abs_start_ms, transcript_items.abs_end_ms, transcript_items.id"
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -263,7 +284,9 @@ class Database:
                 (error_text, item_id),
             )
 
-    def mark_window_built(self, window_id: str, wav_path: str, srt_path: str, window_ms: int) -> None:
+    def mark_window_built(
+        self, window_id: str, wav_path: str, srt_path: str, window_ms: int
+    ) -> None:
         now_iso = iso_utc_from_ms(now_utc_ms())
         with self.connect() as conn:
             conn.execute(
@@ -289,5 +312,7 @@ class Database:
         return {
             "queue_depth": queue_depth,
             "last_ingested_segment": dict(last_ingested) if last_ingested else None,
-            "last_transcribed_segment": dict(last_transcribed) if last_transcribed else None,
+            "last_transcribed_segment": dict(last_transcribed)
+            if last_transcribed
+            else None,
         }

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from dataclasses import fields
+from dataclasses import field
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,8 @@ class TelegramSettings:
     bot_token: str = ""
     chat_id: str = ""
     timeout_sec: float = 30.0
+    default_message_thread_id: int | None = None
+    stream_topics: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

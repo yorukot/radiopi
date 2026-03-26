@@ -16,7 +16,9 @@ from .notifier import TelegramNotifier
 from .windows import merge_wavs
 from .windows import write_srt
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 log = logging.getLogger(__name__)
 
 
@@ -30,7 +32,11 @@ class CoreWorker:
             device=self.config.asr.device,
             compute_type=self.config.asr.compute_type,
         )
-        self.opencc = OpenCC(self.config.asr.opencc_config) if self.config.asr.opencc_config else None
+        self.opencc = (
+            OpenCC(self.config.asr.opencc_config)
+            if self.config.asr.opencc_config
+            else None
+        )
         self.notifier = TelegramNotifier(config.telegram)
         self.health_path = Path(config.data.worker_health_path)
         self.health_path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,7 +112,9 @@ class CoreWorker:
                 )
             asr_path = Path(self.config.data.raw_asr_dir) / f"{segment['id']}.json"
             asr_path.parent.mkdir(parents=True, exist_ok=True)
-            asr_path.write_text(json.dumps(raw_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            asr_path.write_text(
+                json.dumps(raw_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             self.db.complete_transcription(segment["id"], str(asr_path), segment_rows)
             self.db.append_daily_jsonl(self.config.data.transcripts_dir, segment_rows)
         except Exception as exc:
@@ -117,13 +125,17 @@ class CoreWorker:
         worked = False
         window_ms = self.config.asr.window_sec * 1000
         close_grace_ms = self.config.asr.close_grace_sec * 1000
-        for window in self.db.list_buildable_windows(now_utc_ms(), window_ms, close_grace_ms):
+        for window in self.db.list_buildable_windows(
+            now_utc_ms(), window_ms, close_grace_ms
+        ):
             segments = self.db.fetch_window_segments(
                 window["stream_id"],
                 window["window_start_utc_ms"],
                 window_ms,
             )
-            transcript_items = self.db.fetch_window_transcript_items([segment["id"] for segment in segments])
+            transcript_items = self.db.fetch_window_transcript_items(
+                [segment["id"] for segment in segments]
+            )
             archive_dir = Path(self.config.data.archives_dir)
             archive_dir.mkdir(parents=True, exist_ok=True)
             base_name = window["id"]
@@ -136,7 +148,9 @@ class CoreWorker:
                 window_duration_ms=window_ms,
             )
             write_srt(transcript_items, window["window_start_utc_ms"], str(srt_path))
-            self.db.mark_window_built(window["id"], str(wav_path), str(srt_path), window_ms)
+            self.db.mark_window_built(
+                window["id"], str(wav_path), str(srt_path), window_ms
+            )
             worked = True
         return worked
 
@@ -148,7 +162,10 @@ class CoreWorker:
                 self.db.mark_transcript_item_notified(item["id"])
                 continue
             try:
-                self.notifier.send_message(text)
+                self.notifier.send_message(
+                    text,
+                    message_thread_id=self._topic_for_stream(item.get("stream_id")),
+                )
                 self.db.mark_transcript_item_notified(item["id"])
             except Exception as exc:
                 log.exception("Telegram send failed for transcript item %s", item["id"])
@@ -156,12 +173,22 @@ class CoreWorker:
             worked = True
         return worked
 
+    def _topic_for_stream(self, stream_id: str | None) -> int | None:
+        if not stream_id:
+            return self.config.telegram.default_message_thread_id
+        return self.config.telegram.stream_topics.get(
+            stream_id,
+            self.config.telegram.default_message_thread_id,
+        )
+
     def _write_health(self) -> None:
         snapshot = self.db.stats_snapshot()
         snapshot["gpu_worker_loaded_model"] = self.config.asr.model
         snapshot["updated_at_ms"] = now_utc_ms()
         tmp_path = self.health_path.with_suffix(".tmp")
-        tmp_path.write_text(json.dumps(snapshot, ensure_ascii=True, indent=2), encoding="utf-8")
+        tmp_path.write_text(
+            json.dumps(snapshot, ensure_ascii=True, indent=2), encoding="utf-8"
+        )
         tmp_path.replace(self.health_path)
 
     def _convert_text(self, text: str) -> str:
@@ -180,7 +207,9 @@ class CoreWorker:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the radio-core ASR worker")
-    parser.add_argument("--config", required=True, help="Path to server YAML or JSON config")
+    parser.add_argument(
+        "--config", required=True, help="Path to server YAML or JSON config"
+    )
     return parser.parse_args()
 
 

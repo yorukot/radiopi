@@ -32,3 +32,21 @@ telegram:
   bot_token: ""
   chat_id: ""
   timeout_sec: 30.0
+  default_message_thread_id: null
+  stream_topics:
+    CPR-01: 101
+    CPR-02: 102
+    CPR-03: 103
+    CPR-04: 104
+    CPR-05: 105
+    CPR-06: 106
+    CPR-07: 107
+    CPR-08: 108
+    CPR-09: 109
+    CPR-10: 110
+    CPR-11: 111
+    CPR-12: 112
+    CPR-13: 113
+    CPR-14: 114
+    CPR-15: 115
+    CPR-16: 116
