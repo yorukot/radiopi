@@ -1,6 +1,7 @@
 capture:
   uri: "auto"
   freq_hz: 430230000
+  center_freq_hz: 434900000
   sample_rate: 1008000
   quad_rate: 240000
   audio_rate: 16000
@@ -9,17 +10,115 @@ capture:
   rf_squelch_alpha: 0.001
   fm_squelch_threshold: -1.0
   audio_hpf_cutoff: 350.0
-  ctcss_freq: 0.0
+  ctcss_freq: 156.7
   ctcss_q: 30.0
   audio_gain: 0.7
 
 segment:
-  stream_id: "pluto430230"
+  stream_id: "CPR-01"
   start_threshold: 0.02
   stop_threshold: 0.01
   min_silence_ms: 1200
   min_segment_ms: 500
   max_segment_sec: 300
+
+channels:
+  - freq_hz: 430230000
+    stream_id: "CPR-01"
+    ctcss_type: "Tone"
+    ctcss_freq: 156.7
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 431680000
+    stream_id: "CPR-02"
+    ctcss_type: "Tone"
+    ctcss_freq: 146.2
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 433080000
+    stream_id: "CPR-03"
+    ctcss_type: "Tone"
+    ctcss_freq: 110.9
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 434530000
+    stream_id: "CPR-04"
+    ctcss_type: "Tone"
+    ctcss_freq: 103.5
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 435520000
+    stream_id: "CPR-05"
+    ctcss_type: "Tone"
+    ctcss_freq: 97.4
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 436280000
+    stream_id: "CPR-06"
+    ctcss_type: "Tone"
+    ctcss_freq: 91.5
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 437620000
+    stream_id: "CPR-07"
+    ctcss_type: "Tone"
+    ctcss_freq: 82.5
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 439280000
+    stream_id: "CPR-08"
+    ctcss_type: "Tone"
+    ctcss_freq: 77.0
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 431230000
+    stream_id: "CPR-09"
+    ctcss_type: "Tone"
+    ctcss_freq: 151.4
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 432520000
+    stream_id: "CPR-10"
+    ctcss_type: "Tone"
+    ctcss_freq: 141.3
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 433610000
+    stream_id: "CPR-11"
+    ctcss_type: "Tone"
+    ctcss_freq: 107.2
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 435390000
+    stream_id: "CPR-12"
+    ctcss_type: "Tone"
+    ctcss_freq: 100.0
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 435680000
+    stream_id: "CPR-13"
+    ctcss_type: "Tone"
+    ctcss_freq: 94.8
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 436700000
+    stream_id: "CPR-14"
+    ctcss_type: "Tone"
+    ctcss_freq: 85.4
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 438340000
+    stream_id: "CPR-15"
+    ctcss_type: "Tone"
+    ctcss_freq: 79.7
+    modulation: "FM"
+    priority: "High"
+  - freq_hz: 439570000
+    stream_id: "CPR-16"
+    ctcss_type: "Tone"
+    ctcss_freq: 74.4
+    modulation: "FM"
+    priority: "High"
 
 spool:
   root_dir: "./spool"

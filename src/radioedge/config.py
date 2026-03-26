@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+from dataclasses import field
+from dataclasses import fields
 from pathlib import Path
+from typing import Any
 
 from radiocommon import load_config
 from nfm import DEFAULT_AUDIO_GAIN
@@ -21,6 +24,7 @@ from nfm import DEFAULT_URI
 class CaptureSettings:
     uri: str = DEFAULT_URI
     freq_hz: int = DEFAULT_FREQ
+    center_freq_hz: int | None = None
     sample_rate: int = DEFAULT_SAMPLE_RATE
     quad_rate: int = DEFAULT_QUAD_RATE
     audio_rate: int = DEFAULT_AUDIO_RATE
@@ -70,20 +74,40 @@ class RuntimeSettings:
 
 
 @dataclass(slots=True)
+class ChannelSettings:
+    freq_hz: int
+    stream_id: str
+    ctcss_type: str = "Tone"
+    ctcss_freq: float = DEFAULT_CTCSS_FREQ
+    modulation: str = "FM"
+    priority: str = "High"
+
+
+@dataclass(slots=True)
 class EdgeConfig:
     capture: CaptureSettings
     segment: SegmentSettings
     spool: SpoolSettings
     upload: UploadSettings
     runtime: RuntimeSettings
+    channels: list[ChannelSettings] = field(default_factory=list)
 
     @classmethod
     def from_file(cls, path: str | Path) -> "EdgeConfig":
         raw = load_config(path)
         return cls(
-            capture=CaptureSettings(**raw.get("capture", {})),
-            segment=SegmentSettings(**raw.get("segment", {})),
-            spool=SpoolSettings(**raw.get("spool", {})),
-            upload=UploadSettings(**raw.get("upload", {})),
-            runtime=RuntimeSettings(**raw.get("runtime", {})),
+            capture=_build_settings(CaptureSettings, raw.get("capture", {})),
+            segment=_build_settings(SegmentSettings, raw.get("segment", {})),
+            spool=_build_settings(SpoolSettings, raw.get("spool", {})),
+            upload=_build_settings(UploadSettings, raw.get("upload", {})),
+            runtime=_build_settings(RuntimeSettings, raw.get("runtime", {})),
+            channels=[
+                _build_settings(ChannelSettings, item)
+                for item in raw.get("channels", [])
+            ],
         )
+
+
+def _build_settings(settings_type: type[Any], raw: dict[str, Any]) -> Any:
+    allowed = {item.name for item in fields(settings_type)}
+    return settings_type(**{key: value for key, value in raw.items() if key in allowed})

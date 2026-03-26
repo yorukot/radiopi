@@ -39,10 +39,10 @@ class TelegramNotifier:
         if message_thread_id is not None:
             payload["message_thread_id"] = message_thread_id
         with path.open("rb") as handle:
-            files = {"document": (path.name, handle, "audio/wav")}
+            files = {"audio": (path.name, handle, "audio/mpeg")}
             with httpx.Client(timeout=self.settings.timeout_sec) as client:
                 response = client.post(
-                    f"{base_url}/sendDocument",
+                    f"{base_url}/sendAudio",
                     data=payload,
                     files=files,
                 )

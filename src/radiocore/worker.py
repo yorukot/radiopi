@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import signal
+import subprocess
 import threading
 from pathlib import Path
 
@@ -40,6 +41,8 @@ class CoreWorker:
         self.notifier = TelegramNotifier(config.telegram)
         self.health_path = Path(config.data.worker_health_path)
         self.health_path.parent.mkdir(parents=True, exist_ok=True)
+        self.telegram_dir = Path(config.data.telegram_dir)
+        self.telegram_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> int:
         self._install_signal_handlers()
@@ -201,16 +204,18 @@ class CoreWorker:
             return
         message_thread_id = self._topic_for_stream(segment.get("stream_id"))
         caption = self._segment_audio_caption(segment, transcript_items)
+        mp3_path = self.telegram_dir / f"{segment['id']}.mp3"
         try:
+            self._convert_wav_to_mp3(segment["wav_path"], mp3_path)
             log.info(
                 "Sending Telegram audio segment=%s stream_id=%s thread_id=%s path=%s",
                 segment["id"],
                 segment.get("stream_id"),
                 message_thread_id,
-                segment["wav_path"],
+                mp3_path,
             )
             self.notifier.send_audio_file(
-                segment["wav_path"],
+                mp3_path,
                 caption=caption,
                 message_thread_id=message_thread_id,
             )
@@ -229,6 +234,29 @@ class CoreWorker:
         if preview:
             return f"{stream_id} {preview}"[:1024]
         return f"{stream_id} {segment['id']}"[:1024]
+
+    def _convert_wav_to_mp3(self, wav_path: str | Path, mp3_path: str | Path) -> None:
+        source = Path(wav_path)
+        target = Path(mp3_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source),
+                "-vn",
+                "-codec:a",
+                "libmp3lame",
+                "-b:a",
+                "64k",
+                str(target),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
     def _write_health(self) -> None:
         snapshot = self.db.stats_snapshot()
