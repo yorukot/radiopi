@@ -51,6 +51,7 @@ class TelegramSettings:
     bot_token: str = ""
     chat_id: str = ""
     timeout_sec: float = 30.0
+    send_audio_files: bool = False
     default_message_thread_id: int | None = None
     stream_topics: dict[str, int] = field(default_factory=dict)
 

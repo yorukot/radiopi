@@ -32,6 +32,7 @@ telegram:
   bot_token: ""
   chat_id: ""
   timeout_sec: 30.0
+  send_audio_files: false
   default_message_thread_id: null
   stream_topics:
     CPR-01: 101

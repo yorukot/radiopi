@@ -117,6 +117,7 @@ class CoreWorker:
             )
             self.db.complete_transcription(segment["id"], str(asr_path), segment_rows)
             self.db.append_daily_jsonl(self.config.data.transcripts_dir, segment_rows)
+            self._send_segment_audio_notification(segment, segment_rows)
         except Exception as exc:
             log.exception("ASR failed for %s", segment["id"])
             self.db.fail_segment(segment["id"], str(exc))
@@ -162,9 +163,16 @@ class CoreWorker:
                 self.db.mark_transcript_item_notified(item["id"])
                 continue
             try:
+                message_thread_id = self._topic_for_stream(item.get("stream_id"))
+                log.info(
+                    "Sending Telegram transcript item=%s stream_id=%s thread_id=%s",
+                    item["id"],
+                    item.get("stream_id"),
+                    message_thread_id,
+                )
                 self.notifier.send_message(
                     text,
-                    message_thread_id=self._topic_for_stream(item.get("stream_id")),
+                    message_thread_id=message_thread_id,
                 )
                 self.db.mark_transcript_item_notified(item["id"])
             except Exception as exc:
@@ -180,6 +188,47 @@ class CoreWorker:
             stream_id,
             self.config.telegram.default_message_thread_id,
         )
+
+    def _send_segment_audio_notification(
+        self,
+        segment: dict,
+        transcript_items: list[dict],
+    ) -> None:
+        if (
+            not self.config.telegram.enabled
+            or not self.config.telegram.send_audio_files
+        ):
+            return
+        message_thread_id = self._topic_for_stream(segment.get("stream_id"))
+        caption = self._segment_audio_caption(segment, transcript_items)
+        try:
+            log.info(
+                "Sending Telegram audio segment=%s stream_id=%s thread_id=%s path=%s",
+                segment["id"],
+                segment.get("stream_id"),
+                message_thread_id,
+                segment["wav_path"],
+            )
+            self.notifier.send_audio_file(
+                segment["wav_path"],
+                caption=caption,
+                message_thread_id=message_thread_id,
+            )
+        except Exception:
+            log.exception("Telegram audio upload failed for segment %s", segment["id"])
+
+    def _segment_audio_caption(
+        self,
+        segment: dict,
+        transcript_items: list[dict],
+    ) -> str:
+        stream_id = segment.get("stream_id") or "unknown"
+        preview = " ".join(
+            item["text"].strip() for item in transcript_items if item["text"].strip()
+        )
+        if preview:
+            return f"{stream_id} {preview}"[:1024]
+        return f"{stream_id} {segment['id']}"[:1024]
 
     def _write_health(self) -> None:
         snapshot = self.db.stats_snapshot()

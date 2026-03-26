@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import httpx
 
 from .config import TelegramSettings
@@ -20,3 +22,28 @@ class TelegramNotifier:
                 data=payload,
             )
             response.raise_for_status()
+
+    def send_audio_file(
+        self,
+        file_path: str | Path,
+        caption: str = "",
+        message_thread_id: int | None = None,
+    ) -> None:
+        if not self.settings.enabled or not self.settings.send_audio_files:
+            return
+        path = Path(file_path)
+        base_url = f"https://api.telegram.org/bot{self.settings.bot_token}"
+        payload = {"chat_id": self.settings.chat_id}
+        if caption:
+            payload["caption"] = caption[:1024]
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
+        with path.open("rb") as handle:
+            files = {"document": (path.name, handle, "audio/wav")}
+            with httpx.Client(timeout=self.settings.timeout_sec) as client:
+                response = client.post(
+                    f"{base_url}/sendDocument",
+                    data=payload,
+                    files=files,
+                )
+                response.raise_for_status()
