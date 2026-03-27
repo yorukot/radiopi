@@ -23,6 +23,17 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+IGNORED_SUBTITLE_PHRASES = (
+    "謝謝觀看",
+    "謝謝大家",
+    "優優獨播劇場",
+    "YoYo Television Series Exclusive",
+    "字幕志願者",
+    "請不吝點贊",
+    "感謝觀看",
+)
+
+
 class CoreWorker:
     def __init__(self, config: CoreConfig) -> None:
         self.config = config
@@ -81,6 +92,9 @@ class CoreWorker:
             }
             for item in segments:
                 converted_text = self._convert_text(item.text)
+                text = converted_text.strip()
+                if not text or self._should_ignore_transcript_text(text):
+                    continue
                 raw_payload["segments"].append(
                     {
                         "id": item.id,
@@ -98,9 +112,6 @@ class CoreWorker:
                         ],
                     }
                 )
-                text = converted_text.strip()
-                if not text:
-                    continue
                 rel_start_ms = int(item.start * 1000)
                 rel_end_ms = int(item.end * 1000)
                 segment_rows.append(
@@ -162,7 +173,7 @@ class CoreWorker:
         worked = False
         for item in self.db.list_pending_transcript_notifications():
             text = item["text"].strip()
-            if not text:
+            if not text or self._should_ignore_transcript_text(text):
                 self.db.mark_transcript_item_notified(item["id"])
                 continue
             try:
@@ -229,11 +240,17 @@ class CoreWorker:
     ) -> str:
         stream_id = segment.get("stream_id") or "unknown"
         preview = " ".join(
-            item["text"].strip() for item in transcript_items if item["text"].strip()
+            item["text"].strip()
+            for item in transcript_items
+            if item["text"].strip()
+            and not self._should_ignore_transcript_text(item["text"].strip())
         )
         if preview:
             return f"{stream_id} {preview}"[:1024]
         return f"{stream_id} {segment['id']}"[:1024]
+
+    def _should_ignore_transcript_text(self, text: str) -> bool:
+        return any(phrase in text for phrase in IGNORED_SUBTITLE_PHRASES)
 
     def _convert_wav_to_mp3(self, wav_path: str | Path, mp3_path: str | Path) -> None:
         source = Path(wav_path)

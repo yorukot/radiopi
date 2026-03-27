@@ -1,0 +1,13 @@
+{
+  "session_id": "20260322T104248Z-pluto430230",
+  "session_start_utc_ms": 1774176168202,
+  "stream_id": "pluto430230",
+  "segment_id": "pluto430230-1774177300119-000004",
+  "sequence": 4,
+  "segment_start_utc_ms": 1774177300119,
+  "duration_ms": 4427,
+  "sample_rate": 16000,
+  "channels": 1,
+  "sample_format": "s16le",
+  "freq_hz": 430230000
+}
