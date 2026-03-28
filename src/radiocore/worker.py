@@ -213,6 +213,8 @@ class CoreWorker:
             or not self.config.telegram.send_audio_files
         ):
             return
+        if not self._segment_audio_preview_text(transcript_items):
+            return
         message_thread_id = self._topic_for_stream(segment.get("stream_id"))
         caption = self._segment_audio_caption(segment, transcript_items)
         mp3_path = self.telegram_dir / f"{segment['id']}.mp3"
@@ -239,15 +241,18 @@ class CoreWorker:
         transcript_items: list[dict],
     ) -> str:
         stream_id = segment.get("stream_id") or "unknown"
-        preview = " ".join(
+        preview = self._segment_audio_preview_text(transcript_items)
+        if preview:
+            return f"{stream_id} {preview}"[:1024]
+        return f"{stream_id} {segment['id']}"[:1024]
+
+    def _segment_audio_preview_text(self, transcript_items: list[dict]) -> str:
+        return " ".join(
             item["text"].strip()
             for item in transcript_items
             if item["text"].strip()
             and not self._should_ignore_transcript_text(item["text"].strip())
         )
-        if preview:
-            return f"{stream_id} {preview}"[:1024]
-        return f"{stream_id} {segment['id']}"[:1024]
 
     def _should_ignore_transcript_text(self, text: str) -> bool:
         return any(phrase in text for phrase in IGNORED_SUBTITLE_PHRASES)
